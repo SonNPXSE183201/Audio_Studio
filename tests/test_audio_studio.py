@@ -149,7 +149,7 @@ class BuilderTests(unittest.TestCase):
             if HAS_FFMPEG:
                 stats = measure_loudness(out)
                 self.assertAlmostEqual(-14.0, stats["input_i"], delta=1.0)
-                self.assertLessEqual(stats["input_tp"], -0.8)
+                self.assertLessEqual(stats["input_tp"], -1.0)
             # Lần 2: dùng cache, không gọi TTS nữa.
             calls = len(tts.calls)
             builder.build(chunks, None, None, "v", out, os.path.join(tmp, "t.json"))

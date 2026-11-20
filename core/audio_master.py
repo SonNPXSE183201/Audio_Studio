@@ -35,7 +35,8 @@ def _limiter_supports_latency(ffmpeg: str) -> bool:
 
 
 def limiter_filter(ffmpeg: str, true_peak_db: float = -1.5) -> str:
-    limit = 10 ** (true_peak_db / 20.0)
+    # Limiter chặn theo đỉnh MẪU; đỉnh thật (giữa hai mẫu) cao hơn ~0,3-0,5 dB -> chừa thêm 0,5 dB.
+    limit = 10 ** ((true_peak_db - 0.5) / 20.0)
     flt = f"alimiter=limit={limit:.4f}:attack=5:release=60:level=0"
     if _limiter_supports_latency(ffmpeg):
         flt += ":latency=1"
