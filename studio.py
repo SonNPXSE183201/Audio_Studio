@@ -231,6 +231,19 @@ class Studio:
                 items.append((number, path))
         return sorted(items)
 
+    def background_video(self) -> str:
+        """Video nền theo config; không có thì lấy video đầu tiên trong cùng thư mục (tên tùy ý)."""
+        path = rel(self.cfg.get("video", {}).get("background", "assets/background/background.mp4"))
+        if os.path.exists(path):
+            return path
+        folder = os.path.dirname(path)
+        videos = sorted(f for f in glob.glob(os.path.join(folder, "*"))
+                        if f.lower().endswith((".mp4", ".mov", ".mkv", ".webm")))
+        if videos:
+            log(f"Không thấy {os.path.basename(path)}, dùng video nền {os.path.basename(videos[0])}", "Video")
+            return videos[0]
+        return path
+
     def chapter_wav(self, number: int) -> str:
         return os.path.join(self.audio_dir, f"Chuong_{number:04d}.wav")
 
@@ -454,7 +467,7 @@ class Studio:
         inserts = [dict(item, file=rel(item["file"])) for item in ecfg.get("inserts", []) if item.get("file")]
         maker = VideoMaker(self.cfg.get("video", {}), os.path.join(self.work_dir, "video"), self.master_cfg)
         started = time.time()
-        total = maker.make_episode(wavs, rel(self.cfg.get("video", {}).get("background", "assets/background.mp4")),
+        total = maker.make_episode(wavs, self.background_video(),
                                    out, inserts)
         log(f"XONG tập {episode}: {os.path.basename(out)} ({format_duration(total)}, ghép trong "
             f"{format_duration(time.time() - started)})", "Video")
@@ -666,7 +679,7 @@ class Studio:
             log("torch: chưa cài", "Check")
         vcfg = self.cfg.get("voice", {})
         log(f"Giọng mẫu: {rel(vcfg.get('ref_audio', '')) if os.path.exists(rel(vcfg.get('ref_audio', ''))) else 'THIẾU'}", "Check")
-        bg = rel(self.cfg.get("video", {}).get("background", ""))
+        bg = self.background_video()
         log(f"Video nền: {bg if os.path.exists(bg) else 'THIẾU'}", "Check")
         log(f"Chương trong {self.input_dir}: {len(self.chapter_files())}", "Check")
         log("Môi trường OK." if ok else "Thiếu công cụ bắt buộc.", "Check")
