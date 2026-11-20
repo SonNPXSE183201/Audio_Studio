@@ -309,6 +309,22 @@ class MultiJobTests(unittest.TestCase):
             with open(os.path.join(tmp, "input", f"Chuong_{n:04d}.txt"), "w", encoding="utf-8") as f:
                 f.write(f"Chương {n}")
 
+    def test_switch_to_20_chapters_keeps_unfinished_chapters(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._chapters(tmp, 45)
+            s = self._studio(tmp, "audio1", {"episode": {"chapters_per_episode": 20, "watch_seconds": 0}})
+            os.makedirs(s.video_dir, exist_ok=True)
+            # Tập cũ 10 chương đã upload: không được che mất chương 11-20 của tập 20 chương mới.
+            open(os.path.join(s.video_dir, "Chuong_0001-0010_Tap001.mp4.done"), "a").close()
+            self.assertFalse(s.episode_done(1))
+            open(os.path.join(s.video_dir, "Chuong_0001-0020_Tap001.mp4.done"), "a").close()
+            self.assertTrue(s.episode_done(1))
+            # Tập lẻ cuối (41-45) phủ tới chương cuối hiện có -> xong.
+            open(os.path.join(s.video_dir, "Chuong_0041-0045_Tap003.mp4.done"), "a").close()
+            self.assertTrue(s.episode_done(3))
+            pending = [n for n, _ in s.pending_chapters(set())]
+            self.assertEqual(list(range(21, 41)), pending)
+
     def test_lock_claim_and_stale(self):
         import time as _time
 

@@ -4,7 +4,7 @@
   python studio.py run                 đọc audio + tự ghép tập khi đủ chương (chạy song song)
   python studio.py run --range 1-400   chỉ xử lý chương 1-400
   python studio.py audio --project X   chỉ đọc audio của bộ truyện X (chạy nhiều job cùng lúc được)
-  python studio.py video --watch       job ghép video chạy ngầm: đủ 10 chương là ghép + upload
+  python studio.py video --watch       job ghép video chạy ngầm: đủ 20 chương là ghép + upload
   python studio.py video [--finish]    ghép các tập đã đủ audio (--finish: gom cả tập lẻ cuối)
   python studio.py check               kiểm tra môi trường (ffmpeg, GPU, giọng mẫu, video nền)
   python studio.py bench --price 0.69  đo tốc độ thật của pod, quy ra thời gian và chi phí
@@ -14,6 +14,7 @@ import glob
 import json
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -188,7 +189,7 @@ class Studio:
                     log(f"Drive: {marked} tập đã có trên Drive, bỏ qua các chương của chúng.", "Drive")
 
     def episode_of(self, number: int) -> int:
-        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 10))
+        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 20))
         return (number - 1) // max(per, 1) + 1
 
     # ------------------------------------------------------------ chapters
@@ -297,11 +298,13 @@ class Studio:
 
     def pending_chapters(self, handled: set) -> List[Tuple[int, str]]:
         """Chương còn phải đọc: chưa có audio, chưa xử lý trong lần chạy này, tập chưa lên Drive."""
+        files = self.chapter_files()
+        last = max((n for n, _ in files), default=0)
         return [
-            (n, p) for n, p in self.chapter_files()
+            (n, p) for n, p in files
             if n not in handled
             and (self.args.force or not os.path.exists(self.chapter_wav(n)))
-            and not self.episode_done(self.episode_of(n))
+            and not self.episode_done(self.episode_of(n), last)
         ]
 
     def run_audio(self, with_video: bool) -> None:
@@ -361,18 +364,33 @@ class Studio:
 
     # ------------------------------------------------------------ episodes
     def episode_info(self, episode: int) -> Tuple[List[int], str]:
-        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 10))
+        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 20))
         numbers = list(range((episode - 1) * per + 1, episode * per + 1))
         return numbers, os.path.join(self.video_dir, f"Chuong_{numbers[0]:04d}-{numbers[-1]:04d}_Tap{episode:03d}.mp4")
 
-    def episode_done(self, episode: int) -> bool:
-        """Đã có video (hoặc dấu .done sau khi upload) cho tập này, kể cả tập lẻ cuối."""
+    def episode_done(self, episode: int, last_chapter: Optional[int] = None) -> bool:
+        """Đã có video (hoặc dấu .done sau khi upload) phủ ĐỦ các chương của tập này.
+
+        Tập lẻ cuối (ít chương hơn) chỉ tính là xong khi nó phủ tới chương cuối hiện có.
+        Nhờ vậy đổi số chương/tập (10 -> 20) thì tập cũ 0001-0010 không che mất chương 11-20.
+        """
         numbers, _ = self.episode_info(episode)
         pattern = os.path.join(self.video_dir, f"Chuong_{numbers[0]:04d}-*_Tap{episode:03d}.mp4*")
-        return any(p.endswith((".mp4", ".done")) for p in glob.glob(pattern))
+        for p in glob.glob(pattern):
+            if not p.endswith((".mp4", ".done")):
+                continue
+            m = re.search(r"Chuong_\d+-(\d+)_Tap", os.path.basename(p))
+            end = int(m.group(1)) if m else 0
+            if end >= numbers[-1]:
+                return True
+            if last_chapter is None:
+                last_chapter = max((n for n, _ in self.chapter_files()), default=0)
+            if end >= min(last_chapter, numbers[-1]):
+                return True
+        return False
 
     def ready_episodes(self, finish: bool) -> List[int]:
-        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 10))
+        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 20))
         chapters = [n for n, _ in self.chapter_files()]
         if not chapters or per <= 0:
             return []
@@ -581,7 +599,7 @@ class Studio:
         except ImportError:
             pass
         chapter_min = float(self.args.chapter_minutes)
-        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 10))
+        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 20))
         chapter_gpu_min = chapter_min / speed
         lines = [
             f"Máy: {gpu}",

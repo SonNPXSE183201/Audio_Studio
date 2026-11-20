@@ -30,9 +30,9 @@ Thêm chương mới lên Drive trong lúc pod đang chạy: tool tự lấy v�
 
 ### Chạy không cần Network Volume
 
-Nếu video được đẩy hết lên Drive thì có thể bỏ volume: chỉ cần **ổ container ~40 GB** (model ~6 GB, audio 10 chương, video tập đang chờ upload).
+Nếu video được đẩy hết lên Drive thì có thể bỏ volume: chỉ cần **ổ container ~40 GB** (model ~6 GB, audio 20 chương, video tập đang chờ upload).
 - Mỗi lần tạo pod mới phải cài lại và tải lại model: **~10 phút**.
-- Stop/Terminate pod là mất những gì **chưa lên Drive** (tối đa ~10 chương đang làm dở): nên thuê **On-Demand**, không thuê Spot.
+- Stop/Terminate pod là mất những gì **chưa lên Drive** (tối đa ~20 chương đang làm dở): nên thuê **On-Demand**, không thuê Spot.
 - Pod mới tự biết tập nào đã xong nhờ xem thư mục video trên Drive (`sync.skip_uploaded: true`), không cần nhớ `--range`.
 - `upload.delete_audio_after_upload: true` (mặc định) giữ ổ container không đầy.
 
@@ -46,25 +46,25 @@ Nếu video được đẩy hết lên Drive thì có thể bỏ volume: chỉ c
 | RTX PRO 4500 SE ($0.72) | ~31 giờ, $22 | ~26–28 giờ, $19 | ~15 giờ, $22 |
 | A40 ($0.59) | ~44 giờ, $26 | ~37–40 giờ, $23 | ~22 giờ, $26 |
 
-Cộng thêm ổ container (~$0.1–0.3 cả dự án) và ~10 phút mỗi lần tạo pod mới. Video 150 tập ≈ 300–650 GB trên Drive.
+Cộng thêm ổ container (~$0.1–0.3 cả dự án) và ~10 phút mỗi lần tạo pod mới. Video 75 tập (20 chương/tập) ≈ 300–650 GB trên Drive.
 
 ## 2. Chọn GPU: thời gian và chi phí theo cấu hình
 
 OmniVoice (đọc) và PhoWhisper (nghe lại) là model nhỏ, chỉ dùng vài GB VRAM. Mọi GPU 24 GB trở lên đều chạy được với chất lượng **như nhau**. Khác biệt chỉ là **tốc độ**, mà tốc độ quyết định **chi phí**.
 
-Quy ước: 1 chương ≈ **8 phút audio** (khoảng 11.000 ký tự), 1 tập = 10 chương ≈ 80 phút. Cấu hình mặc định: `num_step: 32`, ASR bật, đọc lại tối đa 3 lượt.
+Quy ước: 1 chương ≈ **8 phút audio** (khoảng 11.000 ký tự), 1 tập = 20 chương ≈ 160 phút. Cấu hình mặc định: `num_step: 32`, ASR bật, đọc lại tối đa 3 lượt.
 
-| GPU | VRAM | Giá/giờ | Batch tự chọn | Tốc độ (× thời gian thực) | 1 chương | 1 tập (10 chương) | Chương / 1 giờ pod | Chi phí 1 tập | Chi phí 100 chương |
+| GPU | VRAM | Giá/giờ | Batch tự chọn | Tốc độ (× thời gian thực) | 1 chương | 1 tập (20 chương) | Chương / 1 giờ pod | Chi phí 1 tập | Chi phí 100 chương |
 |---|---|---|---|---|---|---|---|---|---|
-| RTX A5000 | 24 GB | $0.16–0.27 ¹ | 8 | ~3–5× | ~2 phút | ~20 phút | ~30 | **$0.05–0.09** | **$0.5–0.9** |
-| RTX 3090 | 24 GB | $0.22–0.46 ¹ | 8 | ~3,5–5,5× | ~1,8 phút | ~18 phút | ~34 | $0.07–0.14 | $0.7–1.4 |
-| L4 | 24 GB | $0.43–0.59 ¹ | 8 | ~2–3,5× | ~2,9 phút | ~29 phút | ~21 | $0.21–0.28 | $2.0–2.8 ❌ |
-| A40 | 48 GB | $0.59 ² | 16 | ~3,5–5,5× | ~1,8 phút | ~18 phút | ~34 | $0.18 | $1.75 |
-| RTX PRO 4500 SE | 32 GB | $0.72 ² | 8 | ~5–8× ³ | ~1,2 phút | ~12 phút | ~49 | $0.15 | $1.5 |
-| RTX 4090 | 24 GB | $0.89 ² | 8 | ~7–11× | ~0,9 phút | ~9 phút | ~67 | $0.13 | $1.3 |
-| RTX 5090 | 32 GB | $0.69–0.99 ¹ | 8 | ~9–14× | ~0,7 phút | ~7 phút | ~82 | **$0.08–0.12** | **$0.8–1.2** |
-| L40S | 48 GB | $1.09 ² | 16 | ~7–10× | ~0,9 phút | ~9,5 phút | ~64 | $0.17 | $1.7 |
-| RTX PRO 6000 | 96 GB | $2.69 ² | 24 | ~9–15× | ~0,7 phút | ~7 phút | ~90 | $0.30 | $3.0 ❌ |
+| RTX A5000 | 24 GB | $0.16–0.27 ¹ | 8 | ~3–5× | ~2 phút | ~40 phút | ~30 | **$0.10–0.18** | **$0.5–0.9** |
+| RTX 3090 | 24 GB | $0.22–0.46 ¹ | 8 | ~3,5–5,5× | ~1,8 phút | ~36 phút | ~34 | $0.14–0.28 | $0.7–1.4 |
+| L4 | 24 GB | $0.43–0.59 ¹ | 8 | ~2–3,5× | ~2,9 phút | ~58 phút | ~21 | $0.42–0.56 | $2.0–2.8 ❌ |
+| A40 | 48 GB | $0.59 ² | 16 | ~3,5–5,5× | ~1,8 phút | ~36 phút | ~34 | $0.36 | $1.75 |
+| RTX PRO 4500 SE | 32 GB | $0.72 ² | 8 | ~5–8× ³ | ~1,2 phút | ~24 phút | ~49 | $0.30 | $1.5 |
+| RTX 4090 | 24 GB | $0.89 ² | 8 | ~7–11× | ~0,9 phút | ~18 phút | ~67 | $0.26 | $1.3 |
+| RTX 5090 | 32 GB | $0.69–0.99 ¹ | 8 | ~9–14× | ~0,7 phút | ~14 phút | ~82 | **$0.16–0.24** | **$0.8–1.2** |
+| L40S | 48 GB | $1.09 ² | 16 | ~7–10× | ~0,9 phút | ~19 phút | ~64 | $0.34 | $1.7 |
+| RTX PRO 6000 | 96 GB | $2.69 ² | 24 | ~9–15× | ~0,7 phút | ~14 phút | ~90 | $0.60 | $3.0 ❌ |
 | A100 / H100 | 80 GB | $1.2–2.7 | 24 | ~8–15× | — | — | — | đắt | ❌ không đáng |
 
 ¹ Giá công bố trên runpod.io (Community–Secure Cloud, 2026). Giá thật trên tài khoản có thể khác, xem trang Deploy.
@@ -88,9 +88,9 @@ Kết quả mẫu:
 [Bench] Máy: NVIDIA GeForce RTX 5090 (VRAM dùng tối đa 6.2 GB)
 [Bench] Đọc 48 câu = 6.9 phút audio trong 0.6 phút -> nhanh gấp 11.5 lần thời gian thực (2 câu phải đọc lại)
 [Bench] 1 chương ~8 phút audio: ~0.7 phút GPU
-[Bench] 1 tập 10 chương: ~7 phút
+[Bench] 1 tập 20 chương: ~14 phút
 [Bench] 1 giờ pod: ~86 chương (~11.5 giờ audio)
-[Bench] Giá $0.69/giờ: ~$0.008/chương, ~$0.08/tập, ~$0.060/giờ audio
+[Bench] Giá $0.69/giờ: ~$0.008/chương, ~$0.16/tập, ~$0.060/giờ audio
 ```
 
 (Số trong khối trên chỉ minh họa định dạng, không phải số đo.) Có thể thuê 2–3 loại GPU, chạy `bench` trên mỗi loại rồi giữ lại loại có **"$/tập" thấp nhất**.
@@ -217,9 +217,9 @@ bash run.sh start                 # chạy nền, đóng trình duyệt vẫn ch
 bash run.sh log                   # xem tiến độ
 ```
 
-Khi chạy, GPU đọc audio từng chương. Đủ 10 chương thì CPU ghép tập và upload **trong lúc GPU đọc tiếp**.
+Khi chạy, GPU đọc audio từng chương. Đủ 20 chương thì CPU ghép tập và upload **trong lúc GPU đọc tiếp**.
 
-Hết truyện (tập cuối chưa đủ 10 chương):
+Hết truyện (tập cuối chưa đủ 20 chương):
 
 ```bash
 bash run.sh video --finish
@@ -236,10 +236,10 @@ bash run.sh stop --project Giang_Than
 
 - Mỗi bộ truyện có dữ liệu riêng ở `/workspace/audio_studio/projects/<tên>/`, lấy chương từ `gdrive:Dự án truyện/<tên>/chuong` (theo `{project}` trong `config.yaml`).
 - Các job audio **tự chia chương** bằng khóa: job nào rảnh thì lấy chương kế tiếp chưa ai làm, không đọc trùng, không cần `--range`.
-- Job video chạy bằng CPU, đủ 10 chương liên tiếp là ghép tập và upload, mỗi tập chỉ ghép một lần, tự dừng khi audio xong hết.
+- Job video chạy bằng CPU, đủ 20 chương liên tiếp là ghép tập và upload, mỗi tập chỉ ghép một lần, tự dừng khi audio xong hết.
 - `--jobs 2` có nhanh hơn 1 job không thì tùy GPU: xem `nvidia-smi`, GPU-Util dưới ~70% thì mới đáng chạy 2 job (mục 2). Mỗi job tự giảm batch còn một nửa để vừa VRAM.
 
-**2 pod cho một bộ truyện:** khóa chương chỉ có tác dụng trong cùng một pod, nên 2 pod phải chia chương bằng `--range` theo bội số 10:
+**2 pod cho một bộ truyện:** khóa chương chỉ có tác dụng trong cùng một pod, nên 2 pod phải chia chương bằng `--range` theo bội số 20:
 
 ```bash
 bash run.sh start --project Giang_Than --range 1-750      # pod 1

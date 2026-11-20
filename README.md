@@ -3,7 +3,7 @@
 Biến chương truyện chữ tiếng Việt thành **video đọc truyện** đăng YouTube:
 - giọng đọc AI clone **mượt, rõ, không vấp, không sướt, không mất câu**;
 - tự nghe lại từng câu và đọc lại câu bị vấp, nuốt chữ hay lặp từ;
-- ghép mỗi tập 10 chương, chèn intro/watermark của kênh;
+- ghép mỗi tập 20 chương, chèn intro/watermark của kênh;
 - lặp một video nền ngắn (1–2 phút) cho đến hết audio;
 - đẩy lên Google Drive.
 
@@ -13,7 +13,7 @@ Chạy bằng terminal trên RunPod (hoặc máy có GPU NVIDIA). Đọc audio b
 
 > Hướng dẫn từng bước trên RunPod, bảng **thời gian và chi phí theo từng loại GPU**: [docs/HUONG_DAN_RUNPOD.md](docs/HUONG_DAN_RUNPOD.md)
 >
-> Ước tính nhanh: 1 tập 10 chương (~80 phút audio) mất **~7–20 phút** và **~$0.05–0.18** tùy GPU. Cả bộ 800 chương khoảng **$4–14**.
+> Ước tính nhanh: 1 tập 20 chương (~160 phút audio) mất **~14–40 phút** và **~$0.10–0.36** tùy GPU. Cả bộ 800 chương khoảng **$4–14**.
 
 ## Quy trình tự động
 
@@ -27,7 +27,7 @@ Chạy bằng terminal trên RunPod (hoặc máy có GPU NVIDIA). Đọc audio b
 | Nghe lại | Kiểm tra tốc độ đọc, khoảng câm giữa câu, đuôi câu cụt; **PhoWhisper nghe lại theo batch**: sai > 12% ký tự hoặc lặp từ thì đọc lại (seed khác, tối đa 3 lượt) | vẫn lỗi thì **tách đôi câu** đọc từng nửa; không bao giờ bỏ qua câu |
 | Nối câu | Cắt lặng nhẹ tay (giữ phụ âm đầu, đuôi thanh điệu), **cân bằng độ to từng câu**, fade mềm, khoảng nghỉ có "không khí phòng" thay vì im lặng tuyệt đối | không có tiếng click, câu không to nhỏ lệch nhau |
 | Hậu kỳ | Lọc ù 70 Hz, nén nhẹ 2:1, chuẩn **−14 LUFS** (chuẩn YouTube) bằng gain cố định + limiter chặn đỉnh −1 dBTP | không "phồng xẹp", không vỡ tiếng |
-| Ghép tập | Intro + chương 1–4 + watermark + 5–8 + watermark + 9–10, nối WAV không nén (chính xác từng mẫu) | không hụt tiếng ở chỗ nối |
+| Ghép tập | Intro + chương 1–8 + watermark + 9–16 + watermark + 17–20, nối WAV không nén (chính xác từng mẫu) | không hụt tiếng ở chỗ nối |
 | Video | Video nền chuẩn hóa **1 lần** thành đơn vị lặp (crossfade cuối→đầu để lặp liền mạch), lặp bằng concat copy; audio nén **AAC 192k 48 kHz stereo đúng 1 lần** | độ dài hình = độ dài tiếng (sai < 0,15 s) |
 | Lấy dữ liệu | Tải chương `.txt` + giọng mẫu, video nền, intro từ Google Drive; 20 phút xem lại một lần để lấy chương mới | tập đã có trên Drive thì bỏ qua, pod mới tự chạy tiếp |
 | Đóng gói | Đẩy lên Drive bằng rclone, thành công thì xóa video và audio chương, để lại `.done` | lỗi mạng thì giữ file, lần sau thử lại |
@@ -74,7 +74,7 @@ Giọng mẫu càng sạch thì giọng đọc càng sạch: không tiếng vang
 - **Mỗi bộ truyện một thư mục riêng**: chạy với `--project <tên>`. Dữ liệu nằm ở `projects/<tên>/` (chương, audio, video, cache), không bao giờ lẫn chương giữa các bộ.
 - **Một `config.yaml` cho mọi bộ**: đường dẫn Drive viết `gdrive:Dự án truyện/{project}/chuong`; tool thay `{project}` bằng tên bộ (đặt tên trùng thư mục trên Drive). Bộ nào cần khác (giọng, video nền…) thì thêm `projects/<tên>/config.yaml`, chỉ ghi những dòng muốn đổi.
 - **Nhiều job đọc audio cùng lúc tự chia chương**: job nào cũng lấy chương đầu tiên chưa có ai làm (khóa `work/locks/chXXXX.lock`), nên không bao giờ đọc trùng và không cần chia `--range`. Job chết giữa chừng thì job khác làm tiếp chương đó.
-- **Một job video chạy ngầm** (CPU): mỗi phút quét audio, đủ 10 chương liên tiếp là ghép tập + upload; mỗi tập chỉ một job được ghép (khóa `tapNNN.lock`). Tự dừng khi các job audio đã xong.
+- **Một job video chạy ngầm** (CPU): mỗi phút quét audio, đủ 20 chương liên tiếp là ghép tập + upload; mỗi tập chỉ một job được ghép (khóa `tapNNN.lock`). Tự dừng khi các job audio đã xong.
 
 ```bash
 bash run.sh start --project Giang_Than --jobs 2     # 2 job audio + 1 job video
@@ -90,7 +90,7 @@ bash pod/run_projects.sh --jobs 2 Giang_Than To_Vu  # nhiều bộ: chạy lần
 ```bash
 bash run.sh check                    # kiểm tra ffmpeg, GPU, giọng mẫu, video nền, số chương
 bash run.sh bench --price 0.69       # đo tốc độ thật của pod (~5 phút) -> thời gian và $ mỗi chương/tập
-bash run.sh start                    # chạy nền: đọc audio + tự ghép tập khi đủ 10 chương
+bash run.sh start                    # chạy nền: đọc audio + tự ghép tập khi đủ 20 chương
 bash run.sh start --range 1-400      # chỉ xử lý chương 1-400
 bash run.sh log                      # xem tiến độ (Ctrl+C để thoát xem, tool vẫn chạy)
 bash run.sh stop                     # dừng
