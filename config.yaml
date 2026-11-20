@@ -74,7 +74,7 @@ master:
   lufs: -14                     # độ to chuẩn YouTube (-16 nhỏ hơn ~2 dB)
   true_peak_db: -1.0            # limiter chặn đỉnh -> to mà không vỡ tiếng
   highpass_hz: 70               # lọc tiếng ù
-  compressor: true              # nén nhẹ 2:1: chỗ to vọt / nhỏ hụt trong câu được làm đều
+  compressor: false             # như AI_Video_Studio: giữ dải động tự nhiên của giọng (nén làm giọng bẹt, đẩy tiếng thở/nền lên)
   deesser: false                # true nếu giọng mẫu nhiều tiếng xì (s, x)
 
 # --- Ghép tập ---
