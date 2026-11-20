@@ -205,8 +205,20 @@ class AudioBuilder:
             for i in pending:
                 if best[i] is None or not best[i][1]["ok"]:
                     still.append(i)
+            if still:
+                # Thống kê lý do (sai chữ / lệch giọng / tốc độ...) để biết vì sao phải đọc lại.
+                reasons: Dict[str, int] = {}
+                for i in still:
+                    for p in (best[i][1].get("problems") if best[i] else ["không sinh được"]) or []:
+                        key = re.sub(r"[-+]?\d+(\.\d+)?%?", "#", p)
+                        reasons[key] = reasons.get(key, 0) + 1
+                top = ", ".join(f"{k}: {v}" for k, v in sorted(reasons.items(), key=lambda kv: -kv[1])[:5])
+                log(f"{label}Lượt {attempt + 1}: {len(still)}/{len(texts)} câu chưa đạt ({top})", "TTS")
+                for i in still[:3]:
+                    c = best[i][1] if best[i] else {}
+                    log(f"   ví dụ: «{texts[i][:70]}» -> ASR «{str(c.get('asr'))[:70]}» {c.get('problems')}", "TTS")
             if still and attempt + 1 < attempts:
-                log(f"{label}{len(still)}/{len(texts)} câu chưa đạt, đọc lại lượt {attempt + 2} (seed khác)...", "TTS")
+                log(f"{label}Đọc lại {len(still)} câu, lượt {attempt + 2} (seed khác)...", "TTS")
             pending = still
         return best
 
