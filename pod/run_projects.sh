@@ -19,7 +19,8 @@ done
 for project in "${PROJECTS[@]}"; do
   echo "[$(date +%H:%M:%S)] === Bắt đầu bộ: ${project} (${JOBS} job) ==="
   bash "${CODE_DIR}/run.sh" start --project "${project}" --jobs "${JOBS}" "${EXTRA[@]}"
-  while bash "${CODE_DIR}/run.sh" status --project "${project}" | grep -q "PID"; do
+  # Không dùng "| grep -q": grep thoát sớm -> SIGPIPE + pipefail làm vòng chờ dừng ngay.
+  while [[ "$(bash "${CODE_DIR}/run.sh" status --project "${project}" 2>/dev/null)" == *PID* ]]; do
     sleep 60
   done
   echo "[$(date +%H:%M:%S)] === Xong bộ: ${project} ==="

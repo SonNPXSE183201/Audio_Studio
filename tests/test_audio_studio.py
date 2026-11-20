@@ -418,3 +418,32 @@ class MultiJobTests(unittest.TestCase):
                 self.assertEqual(os.path.join(studio.DATA, "input"), studio.rel("input"))
             finally:
                 studio.DATA, studio.BASE = orig_data, orig_base
+
+
+class ProjectNameTests(unittest.TestCase):
+    def test_match_folder_without_diacritics(self):
+        from core.drive import match_folder
+
+        names = ["Đại Niết Bàn", "Trọng sinh 2003: Giang Thần", "Sample"]
+        self.assertEqual("Đại Niết Bàn", match_folder("Đại Niết Bàn", names))
+        self.assertEqual("Đại Niết Bàn", match_folder("Dai Niet Ban", names))
+        self.assertEqual("Đại Niết Bàn", match_folder("dai_niet_ban", names))
+        self.assertEqual("Trọng sinh 2003: Giang Thần", match_folder("Trong sinh 2003: Giang Than", names))
+        self.assertIsNone(match_folder("i Nit Bn", names))   # chữ bị rơi dấu -> không đoán bừa
+
+    def test_project_data_dirs_never_fall_back_to_shared(self):
+        import argparse
+
+        import studio
+
+        with tempfile.TemporaryDirectory() as tmp:
+            studio.BASE = tmp
+            for d in ("input", "output/audio", "assets/voice"):
+                os.makedirs(os.path.join(tmp, d))
+            studio.DATA = os.path.join(tmp, "projects", "Đại Niết Bàn")
+            os.makedirs(studio.DATA)
+            args = argparse.Namespace(range=None, force=False, finish=False, stop_on_error=False, job=None, watch=False)
+            s = studio.Studio({"episode": {"chapters_per_episode": 20}}, args)
+            self.assertTrue(s.input_dir.startswith(studio.DATA))
+            self.assertTrue(s.audio_dir.startswith(studio.DATA))
+            self.assertTrue(studio.own("assets/voice").startswith(studio.DATA))

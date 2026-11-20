@@ -79,6 +79,36 @@ def list_files(remote: str, config_path: Optional[str]) -> Optional[List[str]]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
+def list_dirs(remote: str, config_path: Optional[str]) -> Optional[List[str]]:
+    """Tên các thư mục con trong thư mục Drive (None nếu không đọc được)."""
+    base = _base_cmd(config_path)
+    if base is None or not remote:
+        return None
+    result = subprocess.run(base + ["lsf", remote.rstrip("/"), "--dirs-only"],
+                            capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if result.returncode != 0:
+        return None
+    return [line.strip().rstrip("/") for line in result.stdout.splitlines() if line.strip()]
+
+
+def fold_name(name: str) -> str:
+    """'Đại Niết Bàn' / 'dai_niet_ban' / 'Dai  Niet Ban' -> 'dai niet ban' (so khớp tên không dấu)."""
+    import unicodedata
+
+    text = unicodedata.normalize("NFD", name.replace("Đ", "D").replace("đ", "d"))
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
+    text = re.sub(r"[\s_\-]+", " ", text.lower())
+    return text.strip()
+
+
+def match_folder(wanted: str, names: List[str]) -> Optional[str]:
+    """Tên thư mục trên Drive khớp với tên gõ vào (đúng y hệt, hoặc khớp khi bỏ dấu)."""
+    if wanted in names:
+        return wanted
+    hits = [n for n in names if fold_name(n) == fold_name(wanted)]
+    return hits[0] if len(hits) == 1 else None
+
+
 EPISODE_RE = re.compile(r"^Chuong_(\d{4,})-(\d{4,})_Tap(\d{3,})\.mp4$")
 
 

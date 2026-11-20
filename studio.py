@@ -51,6 +51,11 @@ def rel(path: str) -> str:
     return own
 
 
+def own(path: str) -> str:
+    """Đường dẫn RIÊNG của bộ truyện (không quay về thư mục chung): dùng cho dữ liệu ghi ra."""
+    return path if os.path.isabs(path) else os.path.join(DATA, path)
+
+
 def fill_project(value: Any, project: str) -> Any:
     """Thay {project} trong mọi chuỗi cấu hình bằng tên bộ truyện."""
     if isinstance(value, str):
@@ -145,10 +150,11 @@ class Studio:
         self.cfg = cfg
         self.args = args
         paths = cfg.get("paths", {})
-        self.input_dir = rel(paths.get("input_dir", "input"))
-        self.audio_dir = rel(paths.get("audio_dir", "output/audio"))
-        self.video_dir = rel(paths.get("video_dir", "output/video"))
-        self.work_dir = rel(paths.get("work_dir", "work"))
+        # Chương, audio, video, cache luôn nằm trong thư mục riêng của bộ: không bao giờ lẫn giữa các bộ.
+        self.input_dir = own(paths.get("input_dir", "input"))
+        self.audio_dir = own(paths.get("audio_dir", "output/audio"))
+        self.video_dir = own(paths.get("video_dir", "output/video"))
+        self.work_dir = own(paths.get("work_dir", "work"))
         for d in (self.audio_dir, self.video_dir, self.work_dir):
             os.makedirs(d, exist_ok=True)
         self.first, self.last = parse_range(args.range)
@@ -199,7 +205,7 @@ class Studio:
                 extra = f" (+{after - before} mới)" if after > before else ""
                 log(f"Drive: {after} chương trong input{extra}", "Drive")
         for local, remote in (scfg.get("assets") or {}).items():
-            if remote and drive.pull(remote, rel(local), conf):
+            if remote and drive.pull(remote, own(local), conf):   # giọng / video nền riêng từng bộ
                 log(f"Drive: đã đồng bộ {local}", "Drive")
         remote_dir = self.cfg.get("upload", {}).get("remote_dir")
         if scfg.get("skip_uploaded", True) and remote_dir:
@@ -685,9 +691,37 @@ class Studio:
         log("Môi trường OK." if ok else "Thiếu công cụ bắt buộc.", "Check")
 
 
+def resolve_project(config_name: str, project: str) -> str:
+    """Gõ tên không dấu (Dai Niet Ban) -> đúng tên thư mục trên Drive (Đại Niết Bàn).
+
+    Web Terminal của RunPod hay làm rơi chữ có dấu, nên tool tự tìm thư mục khớp khi bỏ dấu.
+    """
+    project = project.strip()
+    try:
+        cfg = resolve_auto(load_config(config_path(config_name)))
+        scfg = cfg.get("sync", {})
+        template = str(scfg.get("input", ""))
+        if not scfg.get("enabled") or "{project}" not in template:
+            return project
+        parent = template.split("{project}")[0].rstrip("/")
+        names = drive.list_dirs(parent, find_rclone_conf(cfg))
+    except Exception as exc:  # noqa: BLE001 - không đọc được Drive thì giữ nguyên tên
+        log(f"Không dò được tên bộ trên Drive: {exc}", "Drive")
+        return project
+    if not names:
+        return project
+    found = drive.match_folder(project, names)
+    if found is None:
+        log(f"KHÔNG thấy thư mục '{project}' trong {parent}. Các bộ đang có: {', '.join(names)}", "Lỗi")
+        raise SystemExit(1)
+    if found != project:
+        log(f"Tên bộ '{project}' -> thư mục Drive '{found}'", "Drive")
+    return found
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=("run", "audio", "video", "check", "bench"))
+    parser.add_argument("command", choices=("run", "audio", "video", "check", "bench", "resolve"))
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--range", help="chỉ xử lý chương a-b, ví dụ 1-400")
     parser.add_argument("--finish", action="store_true", help="gom cả tập lẻ cuối truyện")
@@ -702,6 +736,10 @@ def main() -> int:
     args = parser.parse_args()
     global DATA
     if args.project:
+        args.project = resolve_project(args.config, args.project)
+        if args.command == "resolve":      # run.sh hỏi tên thư mục thật của bộ truyện
+            print(args.project)
+            return 0
         DATA = os.path.join(BASE, "projects", args.project)
         os.makedirs(DATA, exist_ok=True)
     cfg = load_studio_config(args.config, args.project)

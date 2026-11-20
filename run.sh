@@ -43,6 +43,16 @@ done
 PROJECT_ARGS=()
 WORK_DIR="${DATA_DIR}/work"
 if [[ -n "${PROJECT}" ]]; then
+  # Gõ không dấu (Dai Niet Ban) vẫn ra đúng thư mục Drive (Đại Niết Bàn).
+  if [[ -d "${DATA_DIR}/projects/${PROJECT}" ]]; then
+    :
+  elif RESOLVED="$(cd "${PROJECT_DIR}" && "${PYTHON}" studio.py resolve --project "${PROJECT}" 2>/dev/null | tail -n 1)" \
+       && [[ -n "${RESOLVED}" ]]; then
+    PROJECT="${RESOLVED}"
+  else
+    echo "Không tìm thấy bộ truyện '${PROJECT}' trên Drive (xem lại tên thư mục trong 'Dự án truyện')." >&2
+    exit 1
+  fi
   PROJECT_ARGS=(--project "${PROJECT}")
   WORK_DIR="${DATA_DIR}/projects/${PROJECT}/work"
 fi
