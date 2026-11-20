@@ -24,6 +24,8 @@ bash "${CODE_DIR}/pod/setup_pod.sh" 2>&1 | tee "${LOG}"
 #   PROJECTS="Đại Niết Bàn;Truyen B"  các bộ truyện (đúng tên thư mục trên Drive), NGĂN CÁCH BẰNG ;
 #                                     chạy lần lượt từng bộ
 #   JOBS=2                         số job đọc audio mỗi bộ (dùng chung GPU)
+#   STOP_POD=1                     xong hết (đã đẩy mọi video lên Drive) thì tự Stop pod
+#   STOP_POD=terminate             như trên nhưng XÓA hẳn pod (không còn tính phí ổ đĩa)
 if [[ "${AUTO_RUN:-0}" == "1" ]]; then
   if [[ -n "${PROJECTS:-}" ]]; then
     # Các bộ chạy NỐI TIẾP nhau trong nền (chung GPU, không tranh nhau).
@@ -34,8 +36,13 @@ if [[ "${AUTO_RUN:-0}" == "1" ]]; then
       p="$(echo "$p" | sed 's/^ *//;s/ *$//')"
       [[ -n "$p" ]] && CLEAN+=("$p")
     done
+    STOP_ARGS=()
+    case "${STOP_POD:-0}" in
+      1|stop|yes|true) STOP_ARGS=(--stop-pod) ;;
+      terminate|remove) STOP_ARGS=(--terminate-pod) ;;
+    esac
     # shellcheck disable=SC2086
-    nohup bash "${CODE_DIR}/pod/run_projects.sh" --jobs "${JOBS:-1}" ${RUN_ARGS:-} "${CLEAN[@]}" \
+    nohup bash "${CODE_DIR}/pod/run_projects.sh" --jobs "${JOBS:-1}" "${STOP_ARGS[@]}" ${RUN_ARGS:-} "${CLEAN[@]}" \
       >/workspace/audio_studio_projects.log 2>&1 </dev/null &
     echo "[OK] Chạy lần lượt các bộ: ${PROJECTS}. Xem: bash ${CODE_DIR}/run.sh log --project <tên>"
   else

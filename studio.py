@@ -595,6 +595,7 @@ class Studio:
         if audio:
             self.run_audio(with_video=video)
         if video:
+            self.retry_uploads()   # video đã ghép nhưng lần trước upload lỗi -> đẩy lại
             self.queue_ready_episodes(finish=self.args.finish)
             self._render_queue.put(None)
             if self._render_queue.qsize() > 1:

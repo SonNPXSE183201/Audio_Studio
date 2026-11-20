@@ -26,6 +26,19 @@ Tool tự cài đặt, tự tải chương và tài nguyên từ Drive, bỏ qua
 
 Thêm chương mới lên Drive trong lúc pod đang chạy: tool tự lấy về sau tối đa 20 phút.
 
+**Tự tắt pod khi xong** (giống AI_Video_Studio): thêm `STOP_POD=1` vào lệnh trên. Khi mọi bộ đã đọc xong, tool ghép nốt tập lẻ cuối, đẩy hết video lên Drive rồi mới **Stop** pod. Còn video nào chưa lên Drive thì **không** tắt (tránh mất video). `STOP_POD=terminate` thì xóa hẳn pod.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SonNPXSE183201/Audio_Studio/main/pod/bootstrap.sh   | AUTO_RUN=1 PROJECTS="Đại Niết Bàn" JOBS=2 STOP_POD=1 bash
+```
+
+Pod đang chạy sẵn thì bật riêng (chạy nền, tắt Terminal cũng không sao):
+
+```bash
+nohup bash /root/Audio_Studio/pod/stop_when_done.sh --project "Đại Niết Bàn" > /workspace/stop_pod.log 2>&1 &
+tail -f /workspace/stop_pod.log      # xem trạng thái
+```
+
 ## 1. Tài khoản và lưu trữ
 
 ### Mặc định: không cần Network Volume (template Audio Studio)
