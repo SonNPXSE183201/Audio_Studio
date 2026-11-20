@@ -1,7 +1,7 @@
 """Xử lý audio bằng numpy (không phụ thuộc pydub/audioop)."""
 import os
 import wave
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 
@@ -266,6 +266,67 @@ def f0_contour(samples: np.ndarray, sr: int, fmin: float = 70.0, fmax: float = 4
     lags = lo + np.argmax(ac[:, lo:hi], axis=1)
     strength = ac[np.arange(ac.shape[0]), lags]
     return (sr / lags[strength > 0.5]).astype(np.float32)
+
+
+def breath_regions(samples: np.ndarray, sr: int, min_ms: float = 150.0) -> List[Tuple[int, int]]:
+    """Tìm tiếng lấy hơi (hít vào): đoạn KHÔNG có cao độ, nhỏ hơn giọng nói nhưng to hơn im lặng,
+    dài >= min_ms, đứng ngay sau khoảng lặng (hoặc ở đầu câu), năng lượng không dồn ở tần số cao
+    (phụ âm s/x/ph có trọng tâm phổ > 3.5 kHz và ngắn nên không bị coi là hơi thở).
+    Trả về danh sách (mẫu bắt đầu, mẫu kết thúc).
+    """
+    n, hop = int(sr * 0.03), int(sr * 0.01)
+    if samples.size < n * 3:
+        return []
+    count = 1 + (samples.size - n) // hop
+    idx = np.arange(n)[None, :] + hop * np.arange(count)[:, None]
+    frames = samples[idx].astype(np.float32)
+    rms_db = 20 * np.log10(np.sqrt(np.mean(frames ** 2, axis=1)) + 1e-9)
+    win = (frames - frames.mean(axis=1, keepdims=True)) * np.hanning(n)[None, :]
+    spec = np.abs(np.fft.rfft(win, 2 * n, axis=1))
+    ac = np.fft.irfft(spec ** 2, axis=1)[:, :n]
+    ac = ac / (ac[:, :1] + 1e-12)
+    lo, hi = int(sr / 450), min(n - 1, int(sr / 70))
+    voiced = ac[:, lo:hi].max(axis=1) > 0.5
+    freqs = np.fft.rfftfreq(2 * n, 1 / sr)
+    centroid = (spec * freqs[None, :]).sum(axis=1) / (spec.sum(axis=1) + 1e-9)
+    if not voiced.any():
+        return []
+    speech = float(np.median(rms_db[voiced]))
+    quiet = rms_db < speech - 38
+    cand = (~voiced) & (rms_db >= speech - 38) & (rms_db <= speech - 8) & (centroid < 3500)
+    out: List[Tuple[int, int]] = []
+    i = 0
+    while i < count:
+        if not cand[i]:
+            i += 1
+            continue
+        j = i
+        while j < count and cand[j]:
+            j += 1
+        dur_ms = (j - i) * 10
+        after_silence = i == 0 or quiet[max(0, i - 5):i].any()   # trước đó <= 50 ms có lặng
+        if dur_ms >= min_ms and after_silence:
+            out.append((i * hop, min(samples.size, j * hop + n)))
+        i = j
+    return out
+
+
+def suppress_breaths(samples: np.ndarray, sr: int, reduce_db: float = -30.0, min_ms: float = 150.0) -> np.ndarray:
+    """Giảm tiếng lấy hơi (mặc định -30 dB, gần như mất hẳn) với fade 10 ms để không click; giữ nguyên nhịp."""
+    regions = breath_regions(samples, sr, min_ms)
+    if not regions:
+        return samples
+    out = samples.astype(np.float32).copy()
+    gain_lo = 10 ** (reduce_db / 20.0)
+    ramp = int(sr * 0.01)
+    for a, b in regions:
+        env = np.full(b - a, gain_lo, dtype=np.float32)
+        r = min(ramp, (b - a) // 2)
+        if r > 0:
+            env[:r] = np.linspace(1.0, gain_lo, r)
+            env[-r:] = np.linspace(gain_lo, 1.0, r)
+        out[a:b] *= env
+    return out
 
 
 def median_f0(samples: np.ndarray, sr: int) -> Optional[float]:
