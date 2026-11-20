@@ -88,12 +88,26 @@ def resolve_auto(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return cfg
 
 
+def base_config(name: str) -> Dict[str, Any]:
+    """Cấu hình mặc định trong code + phần GHI ĐÈ ở thư mục dữ liệu (chỉ những dòng bạn đổi).
+
+    Không dùng bản sao đầy đủ: bản sao sẽ giữ mãi mặc định cũ, cập nhật code không có tác dụng.
+    """
+    if os.path.isabs(name):
+        return load_config(name)
+    cfg = load_config(os.path.join(ROOT, name))
+    custom = os.path.join(BASE, name)
+    if os.path.exists(custom) and os.path.abspath(custom) != os.path.abspath(os.path.join(ROOT, name)):
+        cfg = deep_merge(cfg, load_config(custom) or {})
+    return cfg
+
+
 def load_studio_config(name: str, project: Optional[str]) -> Dict[str, Any]:
-    cfg = load_config(config_path(name))
+    cfg = base_config(name)
     if project:
-        own = os.path.join(DATA, "config.yaml")
-        if os.path.exists(own):
-            cfg = deep_merge(cfg, load_config(own))
+        project_cfg = os.path.join(DATA, "config.yaml")
+        if os.path.exists(project_cfg):
+            cfg = deep_merge(cfg, load_config(project_cfg) or {})
         cfg = fill_project(cfg, project)
         cfg = resolve_auto(cfg)
     else:
@@ -698,7 +712,7 @@ def resolve_project(config_name: str, project: str) -> str:
     """
     project = project.strip()
     try:
-        cfg = resolve_auto(load_config(config_path(config_name)))
+        cfg = resolve_auto(base_config(config_name))
         scfg = cfg.get("sync", {})
         template = str(scfg.get("input", ""))
         if not scfg.get("enabled") or "{project}" not in template:

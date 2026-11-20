@@ -35,7 +35,21 @@ PY
 
 log "4/5 - Thư mục dữ liệu trên volume: ${DATA_DIR}"
 mkdir -p "${DATA_DIR}"/{input,output/audio,output/video,work,assets/voice,assets/background,Kenh,.cache/huggingface}
-[[ -f "${DATA_DIR}/config.yaml" ]] || cp "${PROJECT_DIR}/config.yaml" "${DATA_DIR}/config.yaml"
+# config.yaml ở đây chỉ là phần GHI ĐÈ (những dòng muốn đổi); mặc định luôn lấy theo code mới nhất.
+# Bản sao đầy đủ từ phiên bản cũ sẽ giữ mãi mặc định cũ -> đổi tên để không dùng nữa.
+if [[ -f "${DATA_DIR}/config.yaml" ]] && grep -q "AUDIO STUDIO: đọc truyện" "${DATA_DIR}/config.yaml"; then
+  mv "${DATA_DIR}/config.yaml" "${DATA_DIR}/config.yaml.old" && echo "[OK] Bỏ bản sao config cũ (config.yaml.old)"
+fi
+if [[ ! -f "${DATA_DIR}/config.yaml" ]]; then
+  cat > "${DATA_DIR}/config.yaml" <<'YAML'
+# Chỉ ghi những dòng muốn ĐỔI so với config.yaml trong code (phần còn lại tự theo bản mới nhất).
+# Ví dụ:
+# master:
+#   lufs: -13
+# episode:
+#   chapters_per_episode: 10
+YAML
+fi
 # Cấu hình lấy từ biến môi trường của RunPod (khai một lần trong template, pod mới tự có):
 #   RCLONE_CONF_B64   = nội dung rclone.conf mã hóa base64
 #   STUDIO_CONFIG_B64 = nội dung config.yaml mã hóa base64 (tùy chọn)
