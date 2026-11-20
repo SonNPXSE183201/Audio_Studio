@@ -1,0 +1,1 @@
+Đặt voice_reference_clean.wav + voice_reference_clean.txt vào đây
