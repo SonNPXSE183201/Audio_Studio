@@ -57,7 +57,7 @@ tts:
 asr:
   enabled: true                 # false: nhanh hơn ~15-20% nhưng không tự sửa câu đọc lỗi
   model_id: "vinai/PhoWhisper-large"   # PhoWhisper-medium nhẹ hơn nếu GPU nhỏ
-  batch_size: 16
+  batch_size: 8   # số đoạn nghe lại mỗi lượt (hết VRAM thì tool tự chia nhỏ)
   max_cer: 0.12                 # tỷ lệ sai ký tự tối đa (không tính tên riêng trong input/names.txt)
   max_attempts: 3
   cps_min: 7                    # ký tự/giây: thấp hơn = kéo dài/kẹt, cao hơn = nuốt chữ

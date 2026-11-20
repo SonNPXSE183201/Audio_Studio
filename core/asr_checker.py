@@ -1,5 +1,6 @@
 """Nghe lại audio TTS bằng ASR (PhoWhisper) để phát hiện vấp, nuốt chữ, đọc sượt."""
 import re
+import time
 import unicodedata
 from typing import Any, Dict, Iterable, Optional
 
@@ -90,28 +91,55 @@ class ASRChecker:
             log(f"Không nạp được ASR ({exc}). Bỏ qua bước kiểm tra giọng.", "Cảnh báo")
             return False
 
+    @staticmethod
+    def _free_vram() -> None:
+        try:
+            import gc
+
+            import torch
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
+
     def transcribe(self, samples: np.ndarray, sr: int) -> Optional[str]:
         if not self.load():
             return None
         audio = resample(samples, sr, 16000)
-        try:
-            result = self.pipe({"raw": audio, "sampling_rate": 16000})
-            return str(result.get("text", "")).strip()
-        except Exception as exc:
-            log(f"ASR lỗi: {exc}", "Cảnh báo")
-            return None
+        for attempt in range(4):
+            try:
+                result = self.pipe({"raw": audio, "sampling_rate": 16000})
+                return str(result.get("text", "")).strip()
+            except Exception as exc:
+                if "out of memory" not in str(exc).lower() or attempt == 3:
+                    log(f"ASR lỗi: {str(exc)[:200]}", "Cảnh báo")
+                    return None
+                # Hết VRAM (nhiều job chung GPU): giải phóng rồi chờ job khác nhả bộ nhớ, KHÔNG bỏ qua kiểm tra.
+                self._free_vram()
+                time.sleep(5 * (attempt + 1))
+        return None
 
-    def transcribe_batch(self, items, batch_size: int = 16):
-        """Nghe lại nhiều đoạn một lượt (nhanh hơn nhiều so với từng đoạn)."""
+    def transcribe_batch(self, items, batch_size: int = 8):
+        """Nghe lại nhiều đoạn một lượt; hết VRAM thì chia nhỏ lô thay vì bỏ qua kiểm tra."""
         if not items or not self.load():
             return [None] * len(items)
+        self._free_vram()
         inputs = [{"raw": resample(s, sr, 16000), "sampling_rate": 16000} for s, sr in items]
-        try:
-            results = self.pipe(inputs, batch_size=int(self.cfg.get("batch_size", batch_size)))
-            return [str(r.get("text", "")).strip() for r in results]
-        except Exception as exc:
-            log(f"ASR batch lỗi ({exc}); nghe từng đoạn.", "Cảnh báo")
-            return [self.transcribe(s, sr) for s, sr in items]
+        size = max(1, int(self.cfg.get("batch_size", batch_size)))
+        while size > 1:
+            try:
+                results = self.pipe(inputs, batch_size=size)
+                return [str(r.get("text", "")).strip() for r in results]
+            except Exception as exc:
+                if "out of memory" not in str(exc).lower():
+                    log(f"ASR batch lỗi ({str(exc)[:200]}); nghe từng đoạn.", "Cảnh báo")
+                    break
+                self._free_vram()
+                size //= 2
+                log(f"ASR hết VRAM, giảm lô còn {max(size, 1)} đoạn.", "ASR")
+        return [self.transcribe(s, sr) for s, sr in items]
 
     def unload(self) -> None:
         if self.pipe is None:

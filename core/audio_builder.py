@@ -142,6 +142,9 @@ class AudioBuilder:
                 check["problems"].append(f"sai {cer:.0%} ký tự")
             if repeated_words(hyp, text):
                 check["problems"].append("lặp từ")
+        elif self.asr.enabled:
+            # ASR lỗi (vd hết VRAM): câu này CHƯA được nghe lại -> ghi cảnh báo để kiểm tra, không coi là đạt hoàn toàn.
+            check["asr_missing"] = True
         check["ok"] = not check["problems"]
         return check
 
@@ -363,10 +366,13 @@ class AudioBuilder:
                 "start_ms": int(round(start * 1000.0 / sr)),
                 "end_ms": int(round(cursor * 1000.0 / sr)),
             })
-            if not info.get("ok", True):
+            if not info.get("ok", True) or info.get("asr_missing"):
+                problems = list(info.get("problems") or [])
+                if info.get("asr_missing"):
+                    problems.append("chưa nghe lại được (ASR lỗi)")
                 warnings.append({
                     "id": chunk["id"], "time_sec": round(start / float(sr), 1), "text": chunk.get("display", ""),
-                    "problems": info.get("problems"), "asr": info.get("asr"),
+                    "problems": problems, "asr": info.get("asr"),
                 })
             # Câu đã giữ sẵn ~tail_ms lặng ở cuối, câu sau giữ ~lead_ms ở đầu.
             gap_ms = int(chunk["pause_after_ms"]) - tail_ms - lead_ms

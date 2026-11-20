@@ -19,6 +19,8 @@ if [[ -f "${ENV_FILE}" ]]; then
 fi
 PYTHON="${AUDIO_STUDIO_PYTHON:-python3}"
 export PYTHONIOENCODING=utf-8 PYTHONUTF8=1
+# Nhiều job chung 1 GPU: giảm phân mảnh VRAM (tránh ASR "out of memory").
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 if [[ ! -x "${PYTHON}" ]] && ! command -v "${PYTHON}" >/dev/null; then
   echo "Chưa cài môi trường. Chạy: bash ${PROJECT_DIR}/pod/setup_pod.sh" >&2
   exit 1
