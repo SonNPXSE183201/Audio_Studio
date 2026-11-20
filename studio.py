@@ -309,28 +309,35 @@ class Studio:
         """
         from core.audio_utils import read_wav, write_wav
 
-        if max_seconds <= 0:
-            return prepared, ref_text
-        short = prepared.replace(".wav", f"_max{int(max_seconds)}.wav")
+        short = prepared.replace(".wav", f"_max{int(max(max_seconds, 0))}.wav")
         short_txt = short.replace(".wav", ".txt")
         if os.path.exists(short) and os.path.exists(short_txt):
             with open(short_txt, "r", encoding="utf-8") as handle:
                 return short, handle.read().strip()
         samples, sr = read_wav(prepared)
-        cut = TTSEngine.cut_at_pause(samples, sr, max_seconds)
+        cut = TTSEngine.cut_at_pause(samples, sr, max_seconds) if max_seconds > 0 else None
         if cut is None:
-            if samples.size > sr * max_seconds:
+            if max_seconds > 0 and samples.size > sr * max_seconds:
                 log(f"Giọng mẫu dài {samples.size / sr:.1f}s nhưng không tìm được chỗ ngừng để cắt.", "Cảnh báo")
-            return prepared, ref_text
+            cut = samples
+        # Luôn nghe lại giọng mẫu: lời trong .txt phải KHỚP audio, lệch là đọc thừa/mất chữ đầu câu.
         heard = self.audio().asr.transcribe(cut, sr) if self.audio().asr.enabled else None
         if not heard:
-            log("Không nghe lại được đoạn giọng mẫu đã cắt: giữ nguyên giọng mẫu dài.", "Cảnh báo")
+            log("Không nghe lại được giọng mẫu: dùng nguyên giọng mẫu và lời trong .txt.", "Cảnh báo")
             return prepared, ref_text
-        text = TTSEngine.match_transcript_prefix(ref_text, heard) if ref_text else heard
+        if ref_text:
+            text, err = TTSEngine.match_transcript(ref_text, heard)
+            if err > 0.2:
+                log(f"Lời mẫu lệch audio nhiều ({err:.0%}): ASR nghe «{heard}». Hãy sửa file .txt cho khớp.", "Cảnh báo")
+        else:
+            text = heard
+        if text != ref_text:
+            log(f"Lời mẫu đã chỉnh cho khớp audio: «{text}»", "Studio")
         write_wav(short, cut, sr, float32=True)
         with open(short_txt, "w", encoding="utf-8") as handle:
             handle.write(text)
-        log(f"Giọng mẫu {samples.size / sr:.1f}s -> cắt còn {cut.size / sr:.1f}s: «{text}»", "Studio")
+        if cut.size != samples.size:
+            log(f"Giọng mẫu {samples.size / sr:.1f}s -> cắt còn {cut.size / sr:.1f}s ở chỗ ngừng tự nhiên.", "Studio")
         return short, text
 
     def audio(self) -> AudioBuilder:

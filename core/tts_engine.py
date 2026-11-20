@@ -237,18 +237,28 @@ class TTSEngine:
         return cut
 
     @staticmethod
-    def match_transcript_prefix(full_text: str, heard: str) -> str:
-        """Phần đầu của lời mẫu (giữ chính tả, dấu câu) khớp nhất với điều ASR nghe được ở đoạn đã cắt."""
+    def match_transcript(full_text: str, heard: str) -> Tuple[str, float]:
+        """Đoạn liền mạch của lời mẫu (giữ chính tả, dấu câu) khớp nhất với điều ASR nghe được.
+
+        Tìm cả điểm bắt đầu lẫn kết thúc: file .txt hay dư chữ ở đầu/cuối so với audio
+        (vd audio bị cắt mất 'Ba ngày trước, ...'), lời lệch audio làm OmniVoice thừa/mất chữ đầu câu.
+        """
         from core.asr_checker import char_error_rate
 
         words = full_text.split()
-        best_text, best_err = full_text, 9.9
-        for k in range(1, len(words) + 1):
-            candidate = " ".join(words[:k])
-            err = char_error_rate(candidate, heard)
-            if err < best_err - 1e-9:
-                best_text, best_err = candidate, err
-        return best_text
+        best_text, best_err = full_text, char_error_rate(full_text, heard)
+        heard_len = max(1, len(heard))
+        for i in range(len(words)):
+            for j in range(i + 1, len(words) + 1):
+                candidate = " ".join(words[i:j])
+                if len(candidate) > heard_len * 1.6:
+                    break
+                if len(candidate) < heard_len * 0.5:
+                    continue
+                err = char_error_rate(candidate, heard)
+                if err < best_err - 1e-9:
+                    best_text, best_err = candidate, err
+        return best_text, best_err
 
     @staticmethod
     def prepare_reference(src_audio: str, dst_wav: str, max_seconds: float = 20.0) -> str:

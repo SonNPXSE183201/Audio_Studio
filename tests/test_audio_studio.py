@@ -468,5 +468,11 @@ class ReferenceCutTests(unittest.TestCase):
 
         full = "Ba ngày trước, Kế Duyên còn đang làm trâu làm ngựa ở Lam Tinh, tan làm còn cùng bạn bè ăn lẩu hát hò. Vậy mà chỉ sau một giấc ngủ."
         heard = "ba ngày trước kế duyên còn đang làm trâu làm ngựa ở lam tinh tan làm còn cùng bạn bè ăn lẩu hát hò"
-        self.assertEqual("Ba ngày trước, Kế Duyên còn đang làm trâu làm ngựa ở Lam Tinh, tan làm còn cùng bạn bè ăn lẩu hát hò.",
-                         TTSEngine.match_transcript_prefix(full, heard))
+        text, err = TTSEngine.match_transcript(full, heard)
+        self.assertEqual("Ba ngày trước, Kế Duyên còn đang làm trâu làm ngựa ở Lam Tinh, tan làm còn cùng bạn bè ăn lẩu hát hò.", text)
+        self.assertLess(err, 0.05)
+        # Audio bị cắt mất phần đầu: bỏ chữ thừa ở đầu .txt
+        heard2 = "đang làm trâu làm ngựa ở nam tinh tan làm còn cùng bạn bè ăn lẩu hát hò vậy mà chỉ sau một giấc ngủ"
+        text2, _ = TTSEngine.match_transcript(full, heard2)
+        self.assertTrue(text2.startswith("đang làm trâu"), text2)
+        self.assertTrue(text2.endswith("giấc ngủ."), text2)
