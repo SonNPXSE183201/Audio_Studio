@@ -304,6 +304,17 @@ class Studio:
         log(f"Giọng mẫu: {os.path.basename(ref)}", "Studio")
         return {"ref_audio": prepared, "ref_text": ref_text or None, "fp": fingerprint(file_fingerprint(ref), ref_text)}
 
+    def progress(self) -> Dict[str, Any]:
+        """Tiến độ thật của bộ truyện: chương nào chưa có audio mà tập của nó cũng chưa lên Drive."""
+        files = self.chapter_files()
+        last = max((n for n, _ in files), default=0)
+        episodes = sorted({self.episode_of(n) for n, _ in files})
+        done = [e for e in episodes if self.episode_done(e, last)]
+        pending = [n for n, _ in files
+                   if not os.path.exists(self.chapter_wav(n)) and not self.episode_done(self.episode_of(n), last)]
+        return {"chapters": len(files), "episodes": len(episodes), "episodes_done": len(done),
+                "chapters_pending": len(pending), "first_pending": pending[0] if pending else None}
+
     def _short_reference(self, prepared: str, ref_text: str, max_seconds: float) -> Tuple[str, str]:
         """Giọng mẫu dài (> max_seconds) -> cắt ở chỗ ngừng tự nhiên + lấy đúng phần lời tương ứng.
 
@@ -852,7 +863,7 @@ def resolve_project(config_name: str, project: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=("run", "audio", "video", "check", "bench", "resolve"))
+    parser.add_argument("command", choices=("run", "audio", "video", "check", "bench", "resolve", "progress"))
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--range", help="chỉ xử lý chương a-b, ví dụ 1-400")
     parser.add_argument("--finish", action="store_true", help="gom cả tập lẻ cuối truyện")
@@ -883,6 +894,8 @@ def main() -> int:
         studio.check()
     elif args.command == "bench":
         studio.bench()
+    elif args.command == "progress":   # script tắt pod hỏi: còn chương nào chưa xong không?
+        print(json.dumps(studio.progress(), ensure_ascii=False))
     elif args.command == "audio":
         studio.run(audio=True, video=False)
     elif args.command == "video":

@@ -32,12 +32,20 @@ Thêm chương mới lên Drive trong lúc pod đang chạy: tool tự lấy v�
 curl -fsSL https://raw.githubusercontent.com/SonNPXSE183201/Audio_Studio/main/pod/bootstrap.sh   | AUTO_RUN=1 PROJECTS="Đại Niết Bàn" JOBS=2 STOP_POD=1 bash
 ```
 
-Pod đang chạy sẵn thì bật riêng (chạy nền, tắt Terminal cũng không sao):
+Pod đang chạy sẵn: thêm `--stop-pod` vào lệnh start (job đang chạy thì chỉ bật thêm chế độ tự tắt):
 
 ```bash
-nohup bash /root/Audio_Studio/pod/stop_when_done.sh --project "Đại Niết Bàn" > /workspace/stop_pod.log 2>&1 &
-tail -f /workspace/stop_pod.log      # xem trạng thái
+bash /root/Audio_Studio/run.sh start --project "Đại Niết Bàn" --jobs 2 --stop-pod
+bash /root/Audio_Studio/run.sh status --project "Đại Niết Bàn"   # dòng "Tự tắt pod: BẬT"
+tail -f "/workspace/audio_studio/projects/Đại Niết Bàn/work/logs/stop_pod.log"
 ```
+
+Chế độ tự tắt pod chỉ tắt khi **thật sự xong**:
+- không còn job nào chạy, kiểm tra 2 lần liên tiếp;
+- hỏi tool còn chương nào chưa đọc: còn (job chết vì hết VRAM, lỗi mạng…) thì **tự chạy lại job** (tối đa 3 lần) thay vì tắt pod;
+- ghép tập lẻ cuối, đẩy nốt video; còn video chưa lên Drive thì **không** tắt.
+
+`bash run.sh stop` dừng job **và tắt luôn chế độ tự tắt pod**, nên dừng/sửa/chạy lại thoải mái không lo pod bị tắt nhầm. Chạy lại thì nhớ thêm `--stop-pod`.
 
 ## 1. Tài khoản và lưu trữ
 

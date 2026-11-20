@@ -2,9 +2,10 @@
 # Chạy Audio Studio bằng đúng môi trường của pod.
 #   bash run.sh check  [--project X]                 kiểm tra môi trường
 #   bash run.sh start  [--project X] [--jobs 2] ...  chạy nền: N job đọc audio + 1 job ghép video
+#        thêm --stop-pod: xong hết (mọi video đã lên Drive) thì tự Stop pod; --terminate-pod: xóa hẳn pod
 #   bash run.sh status [--project X]                 các job đang chạy, tiến độ
 #   bash run.sh log    [--project X]                 xem log (Ctrl+C thoát xem, job vẫn chạy)
-#   bash run.sh stop   [--project X]                 dừng các job của bộ truyện
+#   bash run.sh stop   [--project X]                 dừng các job của bộ truyện (+ tắt chế độ tự tắt pod)
 #   bash run.sh bench --price 0.69                   đo tốc độ + chi phí thật của pod (~5 phút)
 #   bash run.sh run|audio|video ...                  chạy trực tiếp (giữ terminal)
 set -Eeuo pipefail
@@ -32,6 +33,7 @@ shift || true
 # Tách --project và --jobs ra khỏi các tham số còn lại.
 PROJECT=""
 JOBS=1
+STOP_POD=""
 REST=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -39,6 +41,8 @@ while [[ $# -gt 0 ]]; do
     --project=*) PROJECT="${1#*=}"; shift ;;
     --jobs) JOBS="$2"; shift 2 ;;
     --jobs=*) JOBS="${1#*=}"; shift ;;
+    --stop-pod) STOP_POD="stop"; shift ;;
+    --terminate-pod) STOP_POD="terminate"; shift ;;
     *) REST+=("$1"); shift ;;
   esac
 done
@@ -60,6 +64,26 @@ if [[ -n "${PROJECT}" ]]; then
 fi
 PID_DIR="${WORK_DIR}/pids"
 LOG_DIR="${WORK_DIR}/logs"
+STOPPER_PID="${DATA_DIR}/stop_when_done.pid"
+
+stopper_alive() {
+  [[ -f "${STOPPER_PID}" ]] && kill -0 "$(cat "${STOPPER_PID}")" 2>/dev/null
+}
+
+enable_stopper() {  # bật chế độ tự tắt pod (start ... --stop-pod)
+  [[ -n "${STOP_POD}" ]] || return 0
+  if [[ -z "${PROJECT}" ]]; then
+    echo "[!] --stop-pod cần --project <tên bộ>: không bật tự tắt pod."
+  elif stopper_alive; then
+    echo "[OK] Chế độ tự tắt pod đang bật sẵn (PID $(cat "${STOPPER_PID}"))."
+  else
+    mkdir -p "${LOG_DIR}"
+    local args=(--project "${PROJECT}" --jobs "${JOBS}")
+    [[ "${STOP_POD}" == "terminate" ]] && args+=(--terminate)
+    nohup bash "${PROJECT_DIR}/pod/stop_when_done.sh" "${args[@]}" >>"${LOG_DIR}/stop_pod.log" 2>&1 </dev/null &
+    echo "[OK] Tự ${STOP_POD} pod khi xong hết (log: ${LOG_DIR}/stop_pod.log)."
+  fi
+}
 
 running_pids() {
   local f
@@ -81,6 +105,7 @@ case "${cmd}" in
     mkdir -p "${PID_DIR}" "${LOG_DIR}"
     if [[ -n "$(running_pids)" ]]; then
       echo "[OK] Bộ truyện '${PROJECT:-mặc định}' đang chạy. Xem: bash run.sh status ${PROJECT:+--project \"${PROJECT}\"}"
+      enable_stopper
       exit 0
     fi
     cd "${PROJECT_DIR}"
@@ -95,6 +120,7 @@ case "${cmd}" in
     VIDEO_ARGS=()
     for a in "${REST[@]}"; do [[ "$a" == "--finish" ]] && VIDEO_ARGS+=(--finish); done
     launch video video --watch "${PROJECT_ARGS[@]}" --job video "${VIDEO_ARGS[@]}"
+    enable_stopper
     echo "Xem tiến độ: bash run.sh log ${PROJECT:+--project \"${PROJECT}\"}"
     ;;
   status)
@@ -103,6 +129,7 @@ case "${cmd}" in
       while IFS= read -r f; do echo "  $(basename "$f" .pid): PID $(cat "$f")"; done <<<"${pids}"
     fi
     base="${DATA_DIR}${PROJECT:+/projects/${PROJECT}}"
+    if stopper_alive; then echo "  Tự tắt pod: BẬT (PID $(cat "${STOPPER_PID}"))"; else echo "  Tự tắt pod: tắt"; fi
     echo "  Chương: $(find "${base}/input" -name 'Chuong_*.txt' 2>/dev/null | wc -l) | audio xong: $(ls "${base}/output/audio" 2>/dev/null | grep -c '\.wav$' || true) | tập xong: $(ls "${base}/output/video" 2>/dev/null | grep -c '\.done$' || true)"
     ;;
   log)
@@ -110,6 +137,11 @@ case "${cmd}" in
     exec tail -n 50 -f "${LOG_DIR}"/run_*.log
     ;;
   stop)
+    # Dừng job bằng tay = chưa xong việc -> tắt chế độ tự tắt pod để không tắt nhầm.
+    if stopper_alive; then
+      kill -TERM "$(cat "${STOPPER_PID}")" 2>/dev/null && echo "[OK] Đã tắt chế độ tự tắt pod (bật lại: start ... --stop-pod)."
+      rm -f "${STOPPER_PID}"
+    fi
     pids="$(running_pids)"
     if [[ -z "${pids}" ]]; then echo "Không có job nào đang chạy."; exit 0; fi
     while IFS= read -r f; do kill -TERM "$(cat "$f")" && rm -f "$f" && echo "[OK] Đã dừng $(basename "$f" .pid)"; done <<<"${pids}"
@@ -119,7 +151,7 @@ case "${cmd}" in
     exec "${PYTHON}" -u studio.py "${cmd}" "${PROJECT_ARGS[@]}" "${REST[@]}"
     ;;
   *)
-    sed -n '2,10p' "$0"
+    sed -n '2,11p' "$0"
     exit 1
     ;;
 esac

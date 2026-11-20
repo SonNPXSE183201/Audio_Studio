@@ -22,8 +22,8 @@ done
 for project in "${PROJECTS[@]}"; do
   echo "[$(date +%H:%M:%S)] === Bắt đầu bộ: ${project} (${JOBS} job) ==="
   bash "${CODE_DIR}/run.sh" start --project "${project}" --jobs "${JOBS}" "${EXTRA[@]}"
-  # Không dùng "| grep -q": grep thoát sớm -> SIGPIPE + pipefail làm vòng chờ dừng ngay.
-  while [[ "$(bash "${CODE_DIR}/run.sh" status --project "${project}" 2>/dev/null)" == *PID* ]]; do
+  # Không dùng "| grep -q" (SIGPIPE + pipefail làm vòng chờ dừng ngay); chỉ đếm dòng job audio/video.
+  while grep -Eq '^ +(audio[0-9]+|video): PID' <<<"$(bash "${CODE_DIR}/run.sh" status --project "${project}" 2>/dev/null || true)"; do
     sleep 60
   done
   echo "[$(date +%H:%M:%S)] === Xong bộ: ${project} ==="
@@ -35,5 +35,5 @@ if [[ -n "${STOP}" ]]; then
   for project in "${PROJECTS[@]}"; do ARGS+=(--project "${project}"); done
   [[ "${STOP}" == "terminate" ]] && ARGS+=(--terminate)
   # Ghép tập lẻ cuối, đẩy nốt video, chỉ tắt khi mọi video đã lên Drive.
-  bash "${CODE_DIR}/pod/stop_when_done.sh" --every 30 "${ARGS[@]}"
+  bash "${CODE_DIR}/pod/stop_when_done.sh" --every 30 --jobs "${JOBS}" "${ARGS[@]}"
 fi
