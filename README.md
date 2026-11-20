@@ -26,8 +26,8 @@ curl -fsSL https://raw.githubusercontent.com/SonNPXSE183201/Audio_Studio/main/po
 |---|---|---|
 | Làm sạch | Bỏ bảng chuẩn hóa danh xưng, dòng "NGUYÊN TÁC/Thời gian", `***`; sửa dấu câu dính chữ; `c·hết` → `chết` | — |
 | Chuẩn hóa để đọc | Số (`1.500` → một nghìn năm trăm), %, giờ, đơn vị, tiền tệ, `Lv`, `【】`, từ mượn (hack, game, VIP…) | cách đọc riêng trong `chuong/glossary.json` (Drive) |
-| Chia câu | Mỗi đoạn đọc là **câu trọn vẹn** (≤ 220 ký tự); chỉ cắt ở dấu phẩy khi câu quá dài | nhịp nghỉ theo dấu câu, đoạn văn, lời thoại |
-| Đọc | OmniVoice clone giọng mẫu; **giọng mẫu mã hóa 1 lần**, **nhiều câu sinh cùng lúc** (batch theo VRAM) | — |
+| Chia câu | Mỗi đoạn đọc là **câu trọn vẹn** (≤ 160 ký tự, như AI_Video_Studio); chỉ cắt ở dấu phẩy khi câu quá dài | nhịp nghỉ theo dấu câu, đoạn văn, lời thoại |
+| Đọc | OmniVoice clone giọng mẫu giống hệt cách của AI_Video_Studio: **fp16**, **mỗi câu sinh riêng với cùng seed** (ngữ điệu đồng đều), giọng mẫu mã hóa 1 lần; muốn nhanh thì chạy nhiều job song song | — |
 | Một giọng xuyên suốt | Giọng mẫu giữ nguyên nhịp ngắt nghỉ tự nhiên; đo **cao độ từng câu so với giọng mẫu**, lệch quá 1,5 bán cung thì đọc lại và chọn bản gần giọng mẫu nhất | không còn câu cao câu thấp |
 | Nghe lại | Kiểm tra tốc độ đọc, khoảng câm giữa câu, đuôi câu cụt; **PhoWhisper nghe lại theo batch**: sai > 12% ký tự hoặc lặp từ thì đọc lại (seed khác, tối đa 3 lượt) | vẫn lỗi thì **tách đôi câu** đọc từng nửa; không bao giờ bỏ qua câu |
 | Nối câu | Cắt lặng nhẹ tay (giữ phụ âm đầu, đuôi thanh điệu), **cân bằng độ to từng câu**, fade mềm, khoảng nghỉ có "không khí phòng" thay vì im lặng tuyệt đối | không có tiếng click, câu không to nhỏ lệch nhau |
@@ -175,8 +175,8 @@ Audio_Studio/
 | Một từ bị đọc sai | thêm vào `chuong/glossary.json` trên Drive: `{"từ gốc": "cách đọc"}` |
 | ASR báo sai ở tên nhân vật | thêm tên vào `chuong/names.txt` trên Drive |
 | Giọng câu cao câu thấp | hạ `asr.max_pitch_dev_st` (vd. 1.0: khóa cao độ chặt hơn, đọc lại nhiều hơn) hoặc hạ `tts.position_temperature` |
-| Đọc vội, không ngắt hơi | giữ `tts.preprocess_prompt: false`; dùng giọng mẫu có ngắt nghỉ tự nhiên |
-| Nghe lẹt xẹt | `tts.dtype: auto` (bf16 trên GPU đời mới) hoặc `fp32` |
+| Đọc ngắt quãng giữa câu | giữ `tts.preprocess_prompt: true` (mặc định OmniVoice) |
+| Nghe lẹt xẹt, sước | `tts.dtype: auto` (= fp16) hoặc `fp32`; **không** dùng `bf16` |
 | Video nền giật ở chỗ lặp | tăng `video.loop_crossfade_sec` |
 | Ép độ phân giải | `video.resolution: [1920, 1080]` |
 | Số chương mỗi tập, intro/watermark | `episode.chapters_per_episode`, `episode.inserts` |

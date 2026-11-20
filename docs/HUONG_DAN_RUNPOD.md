@@ -99,7 +99,7 @@ Kết quả mẫu:
 - Cần **≥ 4 vCPU** và **≥ 16 GB RAM**: ghép video, hậu kỳ audio và ASR dùng CPU. Pod ít CPU thì GPU lớn cũng phải chờ.
 - GPU Blackwell (RTX 5090, RTX PRO 4500/6000) cần template **CUDA 12.8**.
 - Nên dùng **Community Cloud** (rẻ hơn). Có thể thuê **Spot/Interruptible**: bị thu hồi giữa chừng cũng không mất việc, vì tool lưu cache sau mỗi 64 câu và chạy lại thì đọc tiếp.
-- Batch được tự chọn theo VRAM (`tts.batch_size: auto`). Nếu log báo hết VRAM, tool tự chia nhỏ batch. Muốn cố định thì đặt số, ví dụ `batch_size: 6`.
+- Mặc định `tts.batch_size: 1`: mỗi câu sinh riêng như AI_Video_Studio (giọng đồng đều nhất). Một job chỉ dùng ~5 GB VRAM, nên để tận dụng GPU hãy chạy **`JOBS=2`–`3`** (24 GB) thay vì tăng batch. `batch_size: auto` nhanh hơn nhưng mỗi câu một kiểu ngữ điệu.
 
 ## 3. Deploy pod
 

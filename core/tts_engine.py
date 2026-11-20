@@ -65,9 +65,9 @@ class TTSEngine:
             wanted = str(self.cfg.get("dtype", "auto")).lower()
             name = torch.cuda.get_device_name(0)
             if wanted == "auto":
-                # bf16 ổn định số học trên GPU đời mới (Ampere+: A5000, 3090, 4090, A40...);
-                # dòng GTX 16xx tính fp16 hay lỗi -> fp32.
-                wanted = "fp32" if "GTX 16" in name else ("bf16" if torch.cuda.is_bf16_supported() else "fp16")
+                # fp16 như AI_Video_Studio (giọng sạch). bf16 kém chính xác khi giải mã âm thanh -> rè, sước.
+                # Dòng GTX 16xx tính fp16 hay lỗi -> fp32.
+                wanted = "fp32" if "GTX 16" in name else "fp16"
             if wanted == "bf16" and torch.cuda.is_bf16_supported():
                 dtype = torch.bfloat16
             elif wanted in ("fp32", "float32"):

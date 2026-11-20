@@ -17,19 +17,22 @@ voice:
 # --- OmniVoice ---
 tts:
   model_id: "k2-fsa/OmniVoice"
-  language: "vi"
-  dtype: "auto"                 # auto: bf16 trên GPU đời mới (A5000/3090/4090/A40...), fp32 trên GTX 16xx | fp16 | bf16 | fp32
-  speed: 1.0                    # tốc độ chuẩn = tốc độ của giọng mẫu. < 1.0 làm giọng kéo giãn, ngắt nghỉ máy móc
-  preprocess_prompt: false      # false: giữ nguyên khoảng ngừng tự nhiên của giọng mẫu (true = OmniVoice xóa
-                                # khoảng ngừng > 200 ms -> model học nhịp dồn dập, đọc vội và giật)
-  position_temperature: 5.0     # độ ngẫu nhiên khi sinh (mặc định OmniVoice 5.0); thấp hơn = các câu đều giọng hơn
-  num_step: 32                  # 32 = chất lượng chuẩn; 24 nhanh hơn ~25% (nghe thử trước khi hạ)
+  # Cách sinh giọng giống hệt AI_Video_Studio (giọng mượt, không sước):
+  language: null                # null như AI_Video_Studio (OmniVoice tự nhận tiếng Việt)
+  dtype: "auto"                 # auto = fp16 (fp32 trên GTX 16xx). KHÔNG dùng bf16: giải mã âm thanh kém chính xác -> rè, sước
+  speed: 1.0
+  preprocess_prompt: true       # mặc định OmniVoice (như AI_Video_Studio): bỏ khoảng lặng thừa trong giọng mẫu
+                                # để model ước lượng đúng tốc độ nói -> không tự chèn ngắt quãng giữa câu
+  position_temperature: 5.0     # mặc định OmniVoice
+  num_step: 32                  # 32 = chất lượng chuẩn
   guidance_scale: 2.0
-  seed: 1234
-  batch_size: auto              # số câu sinh cùng lúc: auto theo VRAM (24GB: 8, 48GB: 16, 80GB: 24)
+  seed: 1234                    # mỗi câu sinh với CÙNG seed -> ngữ điệu đồng đều giữa các câu
+  batch_size: 1                 # 1 = mỗi câu sinh riêng như AI_Video_Studio (giọng đồng nhất nhất).
+                                # Muốn tận dụng GPU thì chạy nhiều job (--jobs 2-3) thay vì tăng batch.
+                                # auto = nhiều câu một lượt (nhanh hơn nhưng mỗi câu một kiểu ngữ điệu)
   batch_max_chars: 1800         # tổng ký tự tối đa mỗi batch (hạ nếu báo hết VRAM)
   save_every: 64                # lưu cache sau mỗi N câu (chạy lại không mất việc)
-  max_chars: 220                # câu trọn vẹn; chỉ cắt ở dấu phẩy khi câu dài hơn mức này
+  max_chars: 160                # như AI_Video_Studio: câu ngắn giảm vấp, nuốt chữ (cắt ở dấu phẩy khi dài hơn)
   merge_sentences: true
   keep_chunk_cache: false       # false: xóa câu thô sau khi xong chương (tiết kiệm ổ pod)
   # Hậu kỳ từng câu
