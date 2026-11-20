@@ -53,7 +53,9 @@ def pull(remote: str, local: str, config_path: Optional[str], includes: Optional
     if base is None or not remote:
         return False
     os.makedirs(local, exist_ok=True)
-    cmd = base + ["copy", remote.rstrip("/"), local, "--retries", "5", "--low-level-retries", "20"]
+    # Nhiều file chương nhỏ: tải song song cho nhanh.
+    cmd = base + ["copy", remote.rstrip("/"), local, "--retries", "5", "--low-level-retries", "20",
+                  "--transfers", "16", "--checkers", "16", "--fast-list"]
     for pattern in includes or []:
         cmd += ["--include", pattern]
     result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
