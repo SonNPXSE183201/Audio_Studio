@@ -241,8 +241,20 @@ class TTSEngine:
             return None
         pauses = TTSEngine.find_pauses(samples, sr)
         # Ranh giới: (thời điểm, độ mạnh). Mạnh = ngừng dài + sạch.
-        bounds = [(0.0, 0.15)] + [(t, length + max(0.0, (-floor - 40) / 100)) for t, length, floor in pauses]
-        bounds.append((total, 0.5))
+        # Đầu/cuối file chỉ là ranh giới khi ở đó im lặng thật: file hay bị cắt cụt giữa lời
+        # (đo giọng mẫu Đại Niết Bàn: frame đầu và cuối đều đang nói -22 dB) -> mất chữ, model học kết thúc cụt.
+        edge = int(sr * 0.1)
+        peak_db = 20 * np.log10(float(np.max(np.abs(samples))) + 1e-9)
+
+        def edge_quiet(seg: np.ndarray) -> bool:
+            return 20 * np.log10(float(np.sqrt(np.mean(seg ** 2))) + 1e-9) < peak_db - 35
+
+        bounds = []
+        if edge_quiet(samples[:edge]):
+            bounds.append((0.0, 0.4))
+        bounds += [(t, length + max(0.0, (-floor - 40) / 100)) for t, length, floor in pauses]
+        if edge_quiet(samples[-edge:]):
+            bounds.append((total, 0.4))
         best, best_score = None, -1e9
         for i, (a, sa) in enumerate(bounds):
             for b, sb in bounds[i + 1:]:
