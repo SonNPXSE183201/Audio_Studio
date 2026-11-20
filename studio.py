@@ -1,0 +1,447 @@
+#!/usr/bin/env python3
+"""Audio Studio: đọc truyện thành audio mượt, ghép tập với video nền lặp, đẩy lên Drive.
+
+  python studio.py run                 đọc audio + tự ghép tập khi đủ chương (chạy song song)
+  python studio.py run --range 1-400   chỉ xử lý chương 1-400
+  python studio.py audio               chỉ đọc audio
+  python studio.py video [--finish]    chỉ ghép các tập đã đủ audio (--finish: gom cả tập lẻ cuối)
+  python studio.py check               kiểm tra môi trường (ffmpeg, GPU, giọng mẫu, video nền)
+  python studio.py bench --price 0.69  đo tốc độ thật của pod, quy ra thời gian và chi phí
+"""
+import argparse
+import glob
+import json
+import os
+import queue
+import sys
+import threading
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, ROOT)
+# Thư mục dữ liệu (chương, giọng mẫu, video nền, output). Trên pod đặt ở volume /workspace
+# để Stop pod không mất; máy cá nhân mặc định là chính thư mục tool.
+DATA = os.path.abspath(os.environ.get("AUDIO_STUDIO_DATA", ROOT))
+
+from core import drive  # noqa: E402
+from core.asr_checker import ASRChecker  # noqa: E402
+from core.audio_builder import AudioBuilder  # noqa: E402
+from core.text_processor import build_chunks, clean_paragraphs, extract_standardization_table  # noqa: E402
+from core.tts_engine import TTSEngine  # noqa: E402
+from core.utils import (  # noqa: E402
+    chapter_number, file_fingerprint, fingerprint, format_duration, load_config, log, read_json, set_log_file,
+)
+from core.video_maker import VideoMaker  # noqa: E402
+
+
+def rel(path: str) -> str:
+    return path if os.path.isabs(path) else os.path.join(DATA, path)
+
+
+def config_path(name: str) -> str:
+    """config.yaml trong thư mục dữ liệu (bản bạn đã sửa) được ưu tiên hơn bản mặc định của tool."""
+    if os.path.isabs(name):
+        return name
+    custom = os.path.join(DATA, name)
+    return custom if os.path.exists(custom) else os.path.join(ROOT, name)
+
+
+def parse_range(text: Optional[str]) -> Tuple[int, int]:
+    if not text:
+        return 1, 10 ** 9
+    a, _, b = text.partition("-")
+    return int(a), int(b or a)
+
+
+def auto_batch_size(cfg: Dict[str, Any]) -> None:
+    """batch_size: auto -> chọn theo VRAM của pod."""
+    if str(cfg.get("batch_size", "auto")).lower() != "auto":
+        return
+    size = 4
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            vram = torch.cuda.get_device_properties(0).total_memory / 1024 ** 3
+            size = 24 if vram >= 70 else 16 if vram >= 40 else 8 if vram >= 20 else 4
+            log(f"GPU {torch.cuda.get_device_name(0)} {vram:.0f} GB -> batch {size} câu/lượt", "Studio")
+        else:
+            size = 1
+    except ImportError:
+        size = 1
+    cfg["batch_size"] = size
+
+
+class Studio:
+    def __init__(self, cfg: Dict[str, Any], args: argparse.Namespace):
+        self.cfg = cfg
+        self.args = args
+        paths = cfg.get("paths", {})
+        self.input_dir = rel(paths.get("input_dir", "input"))
+        self.audio_dir = rel(paths.get("audio_dir", "output/audio"))
+        self.video_dir = rel(paths.get("video_dir", "output/video"))
+        self.work_dir = rel(paths.get("work_dir", "work"))
+        for d in (self.audio_dir, self.video_dir, self.work_dir):
+            os.makedirs(d, exist_ok=True)
+        self.first, self.last = parse_range(args.range)
+        self.master_cfg = cfg.get("master", {})
+        self._audio: Optional[AudioBuilder] = None
+        self._render_queue: "queue.Queue[Optional[int]]" = queue.Queue()
+        self._queued: set = set()
+        self._lock = threading.Lock()
+
+    # ------------------------------------------------------------ chapters
+    def chapter_files(self) -> List[Tuple[int, str]]:
+        files = glob.glob(os.path.join(self.input_dir, "**", "*.txt"), recursive=True)
+        voice_txt = os.path.abspath(rel(self.cfg.get("voice", {}).get("ref_text", "")) or "")
+        items = []
+        for path in files:
+            if os.path.abspath(path) == voice_txt or os.path.basename(path).startswith(("clone_voice", "_")):
+                continue
+            number = chapter_number(path)
+            if number != 999999 and self.first <= number <= self.last:
+                items.append((number, path))
+        return sorted(items)
+
+    def chapter_wav(self, number: int) -> str:
+        return os.path.join(self.audio_dir, f"Chuong_{number:04d}.wav")
+
+    # ------------------------------------------------------------ voice
+    def voice(self) -> Dict[str, Any]:
+        vcfg = self.cfg.get("voice", {})
+        ref = ""
+        for candidate in [vcfg.get("ref_audio", "")] + list(vcfg.get("fallbacks", [])):
+            if candidate and os.path.exists(rel(candidate)):
+                ref = rel(candidate)
+                break
+        if not ref:
+            log("Không có giọng mẫu: OmniVoice sẽ tự chọn giọng (giọng có thể đổi giữa các câu!).", "Cảnh báo")
+            return {"ref_audio": None, "ref_text": None, "fp": "default"}
+        text_path = rel(vcfg.get("ref_text", ""))
+        if not os.path.exists(text_path):
+            text_path = os.path.splitext(ref)[0] + ".txt"
+        ref_text = ""
+        if os.path.exists(text_path):
+            with open(text_path, "r", encoding="utf-8") as handle:
+                ref_text = handle.read().strip()
+        prepared = os.path.join(self.work_dir, "voice", f"ref_{fingerprint(file_fingerprint(ref))}.wav")
+        if not os.path.exists(prepared):
+            TTSEngine.prepare_reference(ref, prepared)
+        if not ref_text:
+            log("Thiếu file .txt của giọng mẫu: dùng ASR nghe ra lời mẫu (nên tự viết để chính xác).", "Cảnh báo")
+            from core.audio_utils import read_wav
+
+            samples, sr = read_wav(prepared)
+            ref_text = self.audio().asr.transcribe(samples, sr) or ""
+            if ref_text:
+                with open(text_path, "w", encoding="utf-8") as handle:
+                    handle.write(ref_text)
+                log(f"Lời mẫu: {ref_text}", "Studio")
+        log(f"Giọng mẫu: {os.path.basename(ref)}", "Studio")
+        return {"ref_audio": prepared, "ref_text": ref_text or None, "fp": fingerprint(file_fingerprint(ref), ref_text)}
+
+    def audio(self) -> AudioBuilder:
+        if self._audio is None:
+            tts_cfg = dict(self.cfg.get("tts", {}))
+            auto_batch_size(tts_cfg)
+            tts = TTSEngine(tts_cfg)
+            asr = ASRChecker(self.cfg.get("asr", {}))
+            self._audio = AudioBuilder(tts, asr, tts_cfg, self.cfg.get("asr", {}), self.work_dir, self.master_cfg)
+        return self._audio
+
+    def load_extras(self) -> Tuple[Dict[str, str], List[str]]:
+        glossary: Dict[str, str] = {}
+        path = os.path.join(self.input_dir, "glossary.json")
+        if os.path.exists(path):
+            glossary = read_json(path, {}) or {}
+        names: List[str] = []
+        names_path = os.path.join(self.input_dir, "names.txt")
+        if os.path.exists(names_path):
+            with open(names_path, "r", encoding="utf-8") as handle:
+                names = [line.strip() for line in handle if line.strip()]
+        return glossary, names
+
+    def process_chapter(self, number: int, path: str, voice: Dict[str, Any], glossary, names) -> Optional[float]:
+        out = self.chapter_wav(number)
+        if os.path.exists(out) and not self.args.force:
+            return None
+        started = time.time()
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = handle.read()
+        paragraphs = clean_paragraphs(raw)
+        if not paragraphs:
+            log(f"Chương {number}: rỗng sau khi làm sạch, bỏ qua.", "Cảnh báo")
+            return None
+        tts_cfg = self.cfg.get("tts", {})
+        chunks = build_chunks(
+            paragraphs,
+            max_chars=int(tts_cfg.get("max_chars", 220)),
+            merge_sentences=bool(tts_cfg.get("merge_sentences", True)),
+            pauses=tts_cfg.get("pauses_ms"),
+            glossary=glossary,
+        )
+        builder = self.audio()
+        builder.force = bool(self.args.force)
+        builder.ignore_terms = names + [item["name"] for item in extract_standardization_table(raw)]
+        work = os.path.join(self.work_dir, f"ch{number:04d}")
+        log(f"===== Chương {number}: {len(chunks)} câu =====", "Studio")
+        timeline = builder.build(chunks, voice["ref_audio"], voice["ref_text"], voice["fp"],
+                                 out, os.path.join(work, "timeline.json"))
+        if not self.cfg.get("tts", {}).get("keep_chunk_cache", False):
+            builder.cleanup_cache(timeline)
+        spent = time.time() - started
+        log(f"Chương {number}: {format_duration(timeline['total_duration_sec'])} audio trong "
+            f"{format_duration(spent)} (x{timeline['total_duration_sec'] / max(spent, 1):.1f} thời gian thực)", "Studio")
+        return timeline["total_duration_sec"]
+
+    def run_audio(self, with_video: bool) -> None:
+        chapters = self.chapter_files()
+        if not chapters:
+            log(f"Không có file .txt nào trong {self.input_dir}.", "Studio")
+            return
+        pending = [(n, p) for n, p in chapters if self.args.force or not os.path.exists(self.chapter_wav(n))]
+        log(f"{len(chapters)} chương, cần đọc {len(pending)}.", "Studio")
+        if with_video:
+            self.queue_ready_episodes()
+        if not pending:
+            return
+        voice = self.voice()
+        glossary, names = self.load_extras()
+        for number, path in pending:
+            try:
+                self.process_chapter(number, path, voice, glossary, names)
+            except Exception as exc:
+                log(f"Chương {number} lỗi: {exc}", "Lỗi")
+                if self.args.stop_on_error:
+                    raise
+                continue
+            if with_video:
+                self.queue_ready_episodes()
+        builder = self._audio
+        if builder:
+            builder.tts.unload()
+            builder.asr.unload()
+
+    # ------------------------------------------------------------ episodes
+    def episode_info(self, episode: int) -> Tuple[List[int], str]:
+        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 10))
+        numbers = list(range((episode - 1) * per + 1, episode * per + 1))
+        return numbers, os.path.join(self.video_dir, f"Chuong_{numbers[0]:04d}-{numbers[-1]:04d}_Tap{episode:03d}.mp4")
+
+    def episode_done(self, episode: int) -> bool:
+        """Đã có video (hoặc dấu .done sau khi upload) cho tập này, kể cả tập lẻ cuối."""
+        numbers, _ = self.episode_info(episode)
+        pattern = os.path.join(self.video_dir, f"Chuong_{numbers[0]:04d}-*_Tap{episode:03d}.mp4*")
+        return any(p.endswith((".mp4", ".done")) for p in glob.glob(pattern))
+
+    def ready_episodes(self, finish: bool) -> List[int]:
+        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 10))
+        chapters = [n for n, _ in self.chapter_files()]
+        if not chapters or per <= 0:
+            return []
+        last_chapter = max(chapters)
+        ready = []
+        for episode in sorted({(n - 1) // per + 1 for n in chapters}):
+            numbers, _ = self.episode_info(episode)
+            if self.episode_done(episode):
+                continue
+            have = [n for n in numbers if os.path.exists(self.chapter_wav(n))]
+            if len(have) == per:
+                ready.append(episode)
+            elif finish and have and numbers[0] <= last_chapter <= numbers[-1] and \
+                    all(os.path.exists(self.chapter_wav(n)) for n in numbers if n <= last_chapter):
+                ready.append(episode)
+        return ready
+
+    def make_episode(self, episode: int) -> None:
+        numbers, _ = self.episode_info(episode)
+        present = [n for n in numbers if os.path.exists(self.chapter_wav(n))]
+        wavs = [self.chapter_wav(n) for n in present]
+        out = os.path.join(self.video_dir, f"Chuong_{present[0]:04d}-{present[-1]:04d}_Tap{episode:03d}.mp4")
+        ecfg = self.cfg.get("episode", {})
+        inserts = [dict(item, file=rel(item["file"])) for item in ecfg.get("inserts", []) if item.get("file")]
+        maker = VideoMaker(self.cfg.get("video", {}), os.path.join(self.work_dir, "video"), self.master_cfg)
+        started = time.time()
+        total = maker.make_episode(wavs, rel(self.cfg.get("video", {}).get("background", "assets/background.mp4")),
+                                   out, inserts)
+        log(f"XONG tập {episode}: {os.path.basename(out)} ({format_duration(total)}, ghép trong "
+            f"{format_duration(time.time() - started)})", "Video")
+        ucfg = dict(self.cfg.get("upload", {}))
+        if ucfg.get("config_path"):
+            ucfg["config_path"] = rel(ucfg["config_path"])
+        if drive.upload(out, ucfg, os.path.join(self.work_dir, "upload.log")):
+            open(out + ".done", "a").close()
+            if ucfg.get("delete_after_upload", True):
+                os.remove(out)
+            if ucfg.get("delete_audio_after_upload", False):
+                for wav in wavs:
+                    os.remove(wav)
+
+    def queue_ready_episodes(self, finish: bool = False) -> None:
+        for episode in self.ready_episodes(finish or self.args.finish):
+            with self._lock:
+                if episode in self._queued:
+                    continue
+                self._queued.add(episode)
+            self._render_queue.put(episode)
+
+    def _render_worker(self) -> None:
+        while True:
+            episode = self._render_queue.get()
+            if episode is None:
+                return
+            try:
+                self.make_episode(episode)
+            except Exception as exc:
+                log(f"Tập {episode} lỗi: {exc}", "Lỗi")
+
+    def run(self, audio: bool, video: bool) -> None:
+        worker = None
+        if video:
+            # Ghép video dùng CPU nên chạy song song trong lúc GPU tiếp tục đọc audio.
+            worker = threading.Thread(target=self._render_worker, daemon=True)
+            worker.start()
+        if audio:
+            self.run_audio(with_video=video)
+        if video:
+            self.queue_ready_episodes(finish=self.args.finish)
+            self._render_queue.put(None)
+            if self._render_queue.qsize() > 1:
+                log("Đang chờ ghép xong các tập còn lại...", "Video")
+            worker.join()
+
+    # ------------------------------------------------------------ bench
+    BENCH_TEXT = (
+        "Dưới ánh nắng vàng nhạt của buổi chiều tà, gió từ vùng ngoại ô thổi về mang theo chút hanh khô "
+        "đặc trưng của phương Bắc. Trên bậc thềm đá rộng lớn trước quảng trường, bóng của hắn kéo dài đổ "
+        "xuống, cô độc nhưng mang một áp lực vô hình khiến người đối diện không dám nhìn thẳng.\n"
+        "“Năm 2003, giá đất ở đây chỉ khoảng 3.500 tệ một mét vuông, ngươi tin không?”\n"
+        "Lâm Viễn ngẩn người, rất lâu sau mới khẽ gật đầu. Hắn biết, người đứng trước mặt mình đã nhìn thấy "
+        "một bàn cờ mà cả thành phố này còn chưa ai nhận ra.\n"
+    )
+
+    def bench(self) -> None:
+        """Đo tốc độ đọc thật trên máy đang chạy, quy ra thời gian và chi phí mỗi chương / tập."""
+        import tempfile
+
+        chapters = self.chapter_files()
+        if chapters:
+            with open(chapters[0][1], "r", encoding="utf-8") as handle:
+                text = handle.read()
+            source = os.path.basename(chapters[0][1])
+        else:
+            text, source = self.BENCH_TEXT * 12, "văn bản mẫu"
+        tts_cfg = self.cfg.get("tts", {})
+        glossary, names = self.load_extras()
+        chunks = build_chunks(clean_paragraphs(text), max_chars=int(tts_cfg.get("max_chars", 220)),
+                              pauses=tts_cfg.get("pauses_ms"), glossary=glossary)[: self.args.sentences]
+        voice = self.voice()
+        builder = self.audio()
+        builder.ignore_terms = names
+        log(f"Benchmark {len(chunks)} câu từ {source}, batch {builder.cfg.get('batch_size')}, "
+            f"num_step {builder.cfg.get('num_step', 32)}, ASR {'bật' if builder.asr.enabled else 'tắt'}", "Bench")
+        # Khởi động (nạp model, mã hóa giọng mẫu) không tính vào thời gian đo.
+        warm = builder.tts.synthesize_batch(["Xin chào các bạn."], voice["ref_audio"], voice["ref_text"], 1)
+        if builder.asr.enabled and warm and warm[0] is not None:
+            builder.asr.transcribe_batch([(warm[0], builder.tts.sample_rate)])
+        with tempfile.TemporaryDirectory() as tmp:
+            builder.cache_dir = tmp
+            builder.force = True
+            started = time.time()
+            infos = builder.render_chunks(chunks, voice["ref_audio"], voice["ref_text"],
+                                          builder._synth_fp(voice["fp"]))
+            spent = time.time() - started
+        audio_sec = sum(float(i.get("duration_s", 0)) for i in infos)
+        pauses = sum(int(c["pause_after_ms"]) for c in chunks) / 1000.0
+        total_audio = audio_sec + pauses
+        speed = total_audio / max(spent, 1e-6)
+        retries = sum(1 for i in infos if int(i.get("attempt", 1)) > 1 or i.get("split"))
+        gpu = "CPU"
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                gpu = torch.cuda.get_device_name(0)
+                peak = torch.cuda.max_memory_allocated() / 1024 ** 3
+                gpu += f" (VRAM dùng tối đa {peak:.1f} GB)"
+        except ImportError:
+            pass
+        chapter_min = float(self.args.chapter_minutes)
+        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 10))
+        chapter_gpu_min = chapter_min / speed
+        lines = [
+            f"Máy: {gpu}",
+            f"Đọc {len(chunks)} câu = {total_audio / 60:.1f} phút audio trong {spent / 60:.1f} phút "
+            f"-> nhanh gấp {speed:.1f} lần thời gian thực ({retries} câu phải đọc lại)",
+            f"1 chương ~{chapter_min:.0f} phút audio: ~{chapter_gpu_min:.1f} phút GPU",
+            f"1 tập {per} chương: ~{chapter_gpu_min * per:.0f} phút",
+            f"1 giờ pod: ~{60 / chapter_gpu_min:.0f} chương (~{speed:.1f} giờ audio)",
+        ]
+        if self.args.price:
+            price = float(self.args.price)
+            lines += [
+                f"Giá ${price:.2f}/giờ: ~${price * chapter_gpu_min / 60:.3f}/chương, "
+                f"~${price * chapter_gpu_min * per / 60:.2f}/tập, ~${price / speed:.3f}/giờ audio",
+            ]
+        for line in lines:
+            log(line, "Bench")
+
+    # ------------------------------------------------------------ check
+    def check(self) -> None:
+        import shutil
+
+        ok = True
+        for tool in ("ffmpeg", "ffprobe"):
+            found = shutil.which(tool)
+            log(f"{tool}: {found or 'THIẾU'}", "Check")
+            ok &= bool(found)
+        log(f"rclone: {shutil.which('rclone') or 'không có (không upload được)'}", "Check")
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                props = torch.cuda.get_device_properties(0)
+                log(f"GPU: {props.name} {props.total_memory / 1024 ** 3:.0f} GB, bf16={torch.cuda.is_bf16_supported()}", "Check")
+            else:
+                log("GPU: không có (chạy CPU sẽ rất chậm)", "Check")
+        except ImportError:
+            log("torch: chưa cài", "Check")
+        vcfg = self.cfg.get("voice", {})
+        log(f"Giọng mẫu: {rel(vcfg.get('ref_audio', '')) if os.path.exists(rel(vcfg.get('ref_audio', ''))) else 'THIẾU'}", "Check")
+        bg = rel(self.cfg.get("video", {}).get("background", ""))
+        log(f"Video nền: {bg if os.path.exists(bg) else 'THIẾU'}", "Check")
+        log(f"Chương trong {self.input_dir}: {len(self.chapter_files())}", "Check")
+        log("Môi trường OK." if ok else "Thiếu công cụ bắt buộc.", "Check")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("command", choices=("run", "audio", "video", "check", "bench"))
+    parser.add_argument("--config", default="config.yaml")
+    parser.add_argument("--range", help="chỉ xử lý chương a-b, ví dụ 1-400")
+    parser.add_argument("--finish", action="store_true", help="gom cả tập lẻ cuối truyện")
+    parser.add_argument("--force", action="store_true", help="đọc lại cả chương đã có audio")
+    parser.add_argument("--stop-on-error", action="store_true")
+    parser.add_argument("--price", type=float, help="bench: giá pod $/giờ để tính chi phí")
+    parser.add_argument("--sentences", type=int, default=48, help="bench: số câu đo (mặc định 48)")
+    parser.add_argument("--chapter-minutes", type=float, default=8.0, help="bench: số phút audio 1 chương")
+    args = parser.parse_args()
+    cfg = load_config(config_path(args.config))
+    studio = Studio(cfg, args)
+    set_log_file(os.path.join(studio.work_dir, "logs", time.strftime("studio_%Y%m%d.log")))
+    if args.command == "check":
+        studio.check()
+    elif args.command == "bench":
+        studio.bench()
+    elif args.command == "audio":
+        studio.run(audio=True, video=False)
+    elif args.command == "video":
+        studio.run(audio=False, video=True)
+    else:
+        studio.run(audio=True, video=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

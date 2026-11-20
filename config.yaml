@@ -1,0 +1,94 @@
+# ==============================================================================
+# AUDIO STUDIO: đọc truyện -> audio chương -> ghép tập với video nền lặp -> Drive
+# ==============================================================================
+
+paths:
+  input_dir: "input"            # Chuong_0001.txt, Chuong_0002.txt ... (có thể để trong thư mục con)
+  audio_dir: "output/audio"     # Chuong_0001.wav: audio chương đã hậu kỳ (WAV 24-bit, không nén)
+  video_dir: "output/video"     # Chuong_0001-0010_Tap001.mp4
+  work_dir: "work"              # cache câu, đơn vị lặp video nền, log
+
+# --- Giọng clone ---
+voice:
+  ref_audio: "assets/voice/voice_reference_clean.wav"   # wav hoặc mp3; nên 6-20 giây, sạch, không nhạc nền
+  ref_text: "assets/voice/voice_reference_clean.txt"    # lời đọc KHỚP CHÍNH XÁC với file giọng mẫu
+  fallbacks: ["input/clone_voice_clean.wav", "input/clone_voice_clean.mp3"]
+
+# --- OmniVoice ---
+tts:
+  model_id: "k2-fsa/OmniVoice"
+  language: "vi"
+  dtype: "fp16"                 # fp16 | bf16 (thử bf16 nếu nghe lẹt xẹt; cần GPU Ampere trở lên) | fp32
+  speed: 1.0                    # giữ 1.0: < 1.0 làm giọng kéo giãn, ngắt nghỉ máy móc
+  num_step: 32                  # 32 = chất lượng chuẩn; 24 nhanh hơn ~25% (nghe thử trước khi hạ)
+  guidance_scale: 2.0
+  seed: 1234
+  batch_size: auto              # số câu sinh cùng lúc: auto theo VRAM (24GB: 8, 48GB: 16, 80GB: 24)
+  batch_max_chars: 1800         # tổng ký tự tối đa mỗi batch (hạ nếu báo hết VRAM)
+  save_every: 64                # lưu cache sau mỗi N câu (chạy lại không mất việc)
+  max_chars: 220                # câu trọn vẹn; chỉ cắt ở dấu phẩy khi câu dài hơn mức này
+  merge_sentences: true
+  keep_chunk_cache: false       # false: xóa câu thô sau khi xong chương (tiết kiệm ổ pod)
+  # Hậu kỳ từng câu
+  trim_silence_db: -50          # cắt lặng nhẹ tay: giữ phụ âm đầu (s, x, h) và đuôi thanh điệu
+  lead_ms: 80
+  tail_ms: 180
+  target_db: -20                # cân bằng độ to mọi câu
+  max_gain_db: 9
+  fade_in_ms: 15
+  fade_out_ms: 40
+  room_tone_db: -66             # khoảng nghỉ có "không khí phòng" rất nhỏ thay cho im lặng tuyệt đối
+  pauses_ms:                    # nhịp nghỉ sau câu theo dấu câu
+    comma: 220
+    sentence: 380
+    question: 440
+    ellipsis: 560
+    paragraph: 650
+    dialogue: 700
+    title: 1200
+
+# --- Nghe lại bằng ASR để đọc lại câu vấp / nuốt chữ / lặp từ ---
+asr:
+  enabled: true                 # false: nhanh hơn ~15-20% nhưng không tự sửa câu đọc lỗi
+  model_id: "vinai/PhoWhisper-large"   # PhoWhisper-medium nhẹ hơn nếu GPU nhỏ
+  batch_size: 16
+  max_cer: 0.12                 # tỷ lệ sai ký tự tối đa (không tính tên riêng trong input/names.txt)
+  max_attempts: 3
+  cps_min: 7                    # ký tự/giây: thấp hơn = kéo dài/kẹt, cao hơn = nuốt chữ
+  cps_max: 28
+  max_gap_ms: 1300              # khoảng câm giữa câu dài hơn = kẹt
+  max_tail_db: -18              # đuôi câu còn to hơn mức này (so với đỉnh) = bị cắt cụt
+
+# --- Hậu kỳ audio chương ---
+master:
+  enabled: true
+  lufs: -14                     # độ to chuẩn YouTube (-16 nhỏ hơn ~2 dB)
+  true_peak_db: -1.0            # limiter chặn đỉnh -> to mà không vỡ tiếng
+  highpass_hz: 70               # lọc tiếng ù
+  deesser: false                # true nếu giọng mẫu nhiều tiếng xì (s, x)
+
+# --- Ghép tập ---
+episode:
+  chapters_per_episode: 10
+  inserts:                      # file chèn: after = chèn TRƯỚC chương thứ (after+1); "end" = cuối tập
+    - {after: 0, file: "Kenh/Script_Intro.mp3"}
+    - {after: 4, file: "Kenh/Script_Watermark.mp3"}
+    - {after: 8, file: "Kenh/Script_Watermark1.mp3"}
+
+video:
+  background: "assets/background/background.mp4"   # video nền ngắn (1-2 phút), lặp đến hết audio
+  fps: 30
+  resolution: null              # null = giữ nguyên độ phân giải video nền; ví dụ [1920, 1080]
+  crf: 18                       # chất lượng nén video nền (chỉ nén 1 lần cho đơn vị lặp)
+  x264_preset: "medium"
+  loop_crossfade_sec: 1.0       # hòa đuôi vào đầu để chỗ lặp không bị giật hình (0 = tắt)
+  audio_bitrate: "192k"         # AAC 48 kHz stereo, nén 1 lần duy nhất
+  insert_gap_sec: 0.4
+
+# --- Google Drive qua rclone ---
+upload:
+  enabled: false
+  remote_dir: "gdrive:Dự án truyện/Ten_truyen"
+  config_path: "rclone.conf"
+  delete_after_upload: true     # xóa video trên pod sau khi đẩy thành công (để lại file .done)
+  delete_audio_after_upload: false

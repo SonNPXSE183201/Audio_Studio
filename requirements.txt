@@ -1,0 +1,6 @@
+# Thư viện điều khiển (máy local hoặc pod).
+# Trên RunPod, pod/setup_pod.sh cài thêm: torch (CUDA), omnivoice, transformers, accelerate.
+pyyaml>=6.0
+numpy>=1.24
+soundfile>=0.12.1
+scipy>=1.10

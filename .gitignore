@@ -1,0 +1,34 @@
+# Bí mật
+rclone.conf
+*.conf
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Dữ liệu và kết quả (không đưa lên git)
+/input/
+/output/
+/work/
+/Kenh/
+*.part
+*.partial.mp4
+*.tmp
+*.tmp.wav
+*.tmp.mp4
+
+# Media: giọng mẫu (giọng người thật) và video nền không đưa lên repo công khai
+assets/voice/*.wav
+assets/voice/*.mp3
+assets/voice/*.flac
+assets/background/*.mp4
+assets/background/*.mov
+assets/background/*.mkv
+
+# Hệ điều hành
+.DS_Store
+Thumbs.db

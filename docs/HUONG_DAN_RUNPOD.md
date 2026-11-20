@@ -1,0 +1,236 @@
+# Hướng dẫn chạy Audio Studio trên RunPod
+
+Mục tiêu: đọc hàng trăm chương thành video với chi phí pod thấp nhất, giọng đọc vẫn mượt và rõ.
+
+## 0. Tóm tắt nhanh
+
+```bash
+# 1. Pod mới hoặc vừa Start lại: một lệnh cài tất cả
+curl -fsSL https://raw.githubusercontent.com/SonNPXSE183201/Audio_Studio/main/pod/bootstrap.sh | bash
+
+# 2. Chép dữ liệu vào /workspace/audio_studio (chương, giọng mẫu, video nền, Kenh, rclone.conf)
+
+# 3. Kiểm tra rồi chạy nền
+cd /root/Audio_Studio
+bash run.sh check
+bash run.sh start
+bash run.sh log
+```
+
+## 1. Tài khoản và volume
+
+- Tạo **Network Volume** khoảng **50 GB**, cùng vùng (datacenter) với GPU định thuê. Volume giữ model (~10 GB), chương, audio và video đang chờ upload. Code nằm ở ổ container và tự clone lại sau mỗi lần Start.
+- Tất cả dữ liệu nằm ở `/workspace/audio_studio`. Stop/Terminate pod không làm mất dữ liệu trên volume.
+
+## 2. Chọn GPU: thời gian và chi phí theo cấu hình
+
+OmniVoice (đọc) và PhoWhisper (nghe lại) là model nhỏ, chỉ dùng vài GB VRAM. Mọi GPU 24 GB trở lên đều chạy được với chất lượng **như nhau**. Khác biệt chỉ là **tốc độ**, mà tốc độ quyết định **chi phí**.
+
+Quy ước: 1 chương ≈ **8 phút audio** (khoảng 11.000 ký tự), 1 tập = 10 chương ≈ 80 phút. Cấu hình mặc định: `num_step: 32`, ASR bật, đọc lại tối đa 3 lượt.
+
+| GPU | VRAM | Giá/giờ | Batch tự chọn | Tốc độ (× thời gian thực) | 1 chương | 1 tập (10 chương) | Chương / 1 giờ pod | Chi phí 1 tập | Chi phí 100 chương |
+|---|---|---|---|---|---|---|---|---|---|
+| RTX A5000 | 24 GB | $0.16–0.27 ¹ | 8 | ~3–5× | ~2 phút | ~20 phút | ~30 | **$0.05–0.09** | **$0.5–0.9** |
+| RTX 3090 | 24 GB | $0.22–0.46 ¹ | 8 | ~3,5–5,5× | ~1,8 phút | ~18 phút | ~34 | $0.07–0.14 | $0.7–1.4 |
+| L4 | 24 GB | $0.43–0.59 ¹ | 8 | ~2–3,5× | ~2,9 phút | ~29 phút | ~21 | $0.21–0.28 | $2.0–2.8 ❌ |
+| A40 | 48 GB | $0.59 ² | 16 | ~3,5–5,5× | ~1,8 phút | ~18 phút | ~34 | $0.18 | $1.75 |
+| RTX PRO 4500 SE | 32 GB | $0.72 ² | 8 | ~5–8× ³ | ~1,2 phút | ~12 phút | ~49 | $0.15 | $1.5 |
+| RTX 4090 | 24 GB | $0.89 ² | 8 | ~7–11× | ~0,9 phút | ~9 phút | ~67 | $0.13 | $1.3 |
+| RTX 5090 | 32 GB | $0.69–0.99 ¹ | 8 | ~9–14× | ~0,7 phút | ~7 phút | ~82 | **$0.08–0.12** | **$0.8–1.2** |
+| L40S | 48 GB | $1.09 ² | 16 | ~7–10× | ~0,9 phút | ~9,5 phút | ~64 | $0.17 | $1.7 |
+| RTX PRO 6000 | 96 GB | $2.69 ² | 24 | ~9–15× | ~0,7 phút | ~7 phút | ~90 | $0.30 | $3.0 ❌ |
+| A100 / H100 | 80 GB | $1.2–2.7 | 24 | ~8–15× | — | — | — | đắt | ❌ không đáng |
+
+¹ Giá công bố trên runpod.io (Community–Secure Cloud, 2026). Giá thật trên tài khoản có thể khác, xem trang Deploy.
+² Giá trên tài khoản của bạn ngày 20/11/2026 (theo hướng dẫn AI_Video_Studio).
+³ **Mốc đo thật**: trên RTX PRO 4500, cách đọc cũ (từng câu một, mã hóa lại giọng mẫu mỗi câu) đọc 7,5 phút audio trong 3,8 phút, tức **~2× thời gian thực**. Bản này sinh theo batch, mã hóa giọng mẫu 1 lần và nghe lại theo batch, nên ước tính nhanh hơn 2,5–4 lần. Các GPU khác được suy ra theo sức tính FP16 tương đối. **Đây là ước tính, chưa đo trên từng pod.** Đo thật bằng lệnh `bench` bên dưới.
+
+**Nên thuê:**
+1. **RTX 5090** hoặc **RTX A5000 / 3090 (Community)**: rẻ nhất trên mỗi chương. 5090 nhanh nhất trong nhóm rẻ.
+2. **RTX 4090 / RTX PRO 4500 SE**: khi nhóm trên hết máy.
+3. Không nên thuê L4 (băng thông bộ nhớ thấp, chậm), RTX PRO 6000, A100, H100 (model nhỏ, không tận dụng được GPU lớn: trả gấp 3–4 lần tiền mà chỉ nhanh hơn chút ít).
+
+**Đo thật trước khi chạy cả truyện (5 phút, vài cent):**
+
+```bash
+bash run.sh bench --price 0.69          # thay 0.69 bằng giá pod đang thuê
+```
+
+Kết quả mẫu:
+
+```
+[Bench] Máy: NVIDIA GeForce RTX 5090 (VRAM dùng tối đa 6.2 GB)
+[Bench] Đọc 48 câu = 6.9 phút audio trong 0.6 phút -> nhanh gấp 11.5 lần thời gian thực (2 câu phải đọc lại)
+[Bench] 1 chương ~8 phút audio: ~0.7 phút GPU
+[Bench] 1 tập 10 chương: ~7 phút
+[Bench] 1 giờ pod: ~86 chương (~11.5 giờ audio)
+[Bench] Giá $0.69/giờ: ~$0.008/chương, ~$0.08/tập, ~$0.060/giờ audio
+```
+
+(Số trong khối trên chỉ minh họa định dạng, không phải số đo.) Có thể thuê 2–3 loại GPU, chạy `bench` trên mỗi loại rồi giữ lại loại có **"$/tập" thấp nhất**.
+
+**Lưu ý khi thuê:**
+- Cần **≥ 4 vCPU** và **≥ 16 GB RAM**: ghép video, hậu kỳ audio và ASR dùng CPU. Pod ít CPU thì GPU lớn cũng phải chờ.
+- GPU Blackwell (RTX 5090, RTX PRO 4500/6000) cần template **CUDA 12.8**.
+- Nên dùng **Community Cloud** (rẻ hơn). Có thể thuê **Spot/Interruptible**: bị thu hồi giữa chừng cũng không mất việc, vì tool lưu cache sau mỗi 64 câu và chạy lại thì đọc tiếp.
+- Batch được tự chọn theo VRAM (`tts.batch_size: auto`). Nếu log báo hết VRAM, tool tự chia nhỏ batch. Muốn cố định thì đặt số, ví dụ `batch_size: 6`.
+
+## 3. Deploy pod
+
+- Template: **RunPod PyTorch** (2.4 trở lên, CUDA 12.x).
+- Container disk: 30 GB. Volume: gắn Network Volume ở `/workspace`.
+- Mở cổng Jupyter (8888) nếu muốn kéo-thả file qua trình duyệt.
+
+## 4. Cài đặt (chạy lại sau mỗi lần Start pod)
+
+Mở Terminal của pod (Web Terminal hoặc Jupyter → Terminal):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SonNPXSE183201/Audio_Studio/main/pod/bootstrap.sh | bash
+```
+
+Lệnh này:
+1. clone hoặc cập nhật code vào `/root/Audio_Studio`;
+2. cài `ffmpeg`, `rclone`, `omnivoice`, `transformers` vào venv dùng chung PyTorch CUDA của template;
+3. tạo cấu trúc `/workspace/audio_studio`, chép `config.yaml` mặc định (nếu chưa có);
+4. tải trước OmniVoice và PhoWhisper lên volume (chỉ lần đầu, các lần sau bỏ qua).
+
+Log cài đặt nằm ở `/workspace/audio_studio_setup.log`.
+
+## 5. Chép dữ liệu lên pod
+
+Cần có:
+
+```
+/workspace/audio_studio/
+├── input/Chuong_0001.txt ...
+├── input/names.txt                       (tùy chọn) tên nhân vật, mỗi dòng 1 tên
+├── input/glossary.json                   (tùy chọn) cách đọc riêng
+├── assets/voice/voice_reference_clean.wav
+├── assets/voice/voice_reference_clean.txt
+├── assets/background/background.mp4
+├── Kenh/Script_Intro.mp3, Script_Watermark.mp3, Script_Watermark1.mp3
+└── rclone.conf
+```
+
+Cách chép:
+- **Jupyter**: kéo-thả file vào đúng thư mục (file zip thì giải nén bằng `unzip -o file.zip -d /workspace/audio_studio/input`).
+- **Từ Google Drive** (sau khi có `rclone.conf`):
+  ```bash
+  rclone copy "gdrive:Dự án truyện/Ten_truyen/chuong" /workspace/audio_studio/input --config /workspace/audio_studio/rclone.conf -P
+  ```
+- **Từ máy tính**: `runpodctl send file.zip` trên máy, rồi `runpodctl receive <mã>` trên pod.
+
+> Giọng mẫu **không có trong repo GitHub** (repo công khai). Hãy tự chép file `.wav` và `.txt` vào `assets/voice/`.
+
+## 6. Google Drive
+
+1. Trên máy tính: `rclone config` → tạo remote tên `gdrive` (Google Drive).
+2. Chép file `rclone.conf` (Windows: `%APPDATA%\rclone\rclone.conf`) vào `/workspace/audio_studio/rclone.conf`.
+3. Sửa `/workspace/audio_studio/config.yaml`:
+   ```yaml
+   upload:
+     enabled: true
+     remote_dir: "gdrive:Dự án truyện/Ten_truyen"
+   ```
+
+Upload thành công thì video bị xóa khỏi pod và để lại file `.done`, nên lần sau tool không ghép lại. Upload lỗi thì giữ video, lần chạy sau thử lại.
+
+## 7. Chạy
+
+```bash
+cd /root/Audio_Studio
+bash run.sh check                 # mọi dòng phải OK, video nền và giọng mẫu không được THIẾU
+bash run.sh start                 # chạy nền, đóng trình duyệt vẫn chạy
+bash run.sh log                   # xem tiến độ
+```
+
+Khi chạy, GPU đọc audio từng chương. Đủ 10 chương thì CPU ghép tập và upload **trong lúc GPU đọc tiếp**.
+
+Hết truyện (tập cuối chưa đủ 10 chương):
+
+```bash
+bash run.sh video --finish
+```
+
+### Nhiều bộ truyện hoặc chia đôi chương
+
+Một tiến trình với batch đã dùng hết GPU, nên **không cần** chạy 2 tiến trình A/B như trước (2 tiến trình tranh GPU sẽ không nhanh hơn). Muốn chia việc cho 2 pod:
+
+```bash
+bash run.sh start --range 1-400      # pod 1
+bash run.sh start --range 401-800    # pod 2 (volume riêng hoặc cùng volume)
+```
+
+## 8. Xem tool đang làm gì
+
+| Muốn xem | Lệnh / nơi xem |
+|---|---|
+| Tiến độ | `bash run.sh log` |
+| Tốc độ mỗi chương | dòng `Chương N: ... audio trong ... (xK thời gian thực)` |
+| GPU có chạy đầy không | `nvidia-smi -l 2` |
+| Câu còn nghi lỗi | `work/chXXXX/timeline.json` → `warnings` (có `time_sec` để nghe kiểm tra) |
+| Audio chương | `output/audio/Chuong_XXXX.wav` (tải về nghe qua Jupyter) |
+| Log upload | `work/upload.log` |
+
+## 9. Tắt pod rồi bật lại
+
+1. `bash run.sh stop` (hoặc cứ để, Stop pod cũng được: cache câu không mất).
+2. Stop pod trên RunPod. Volume vẫn tính tiền lưu trữ nhưng rất rẻ.
+3. Start lại, chạy lại lệnh `bootstrap.sh` ở mục 4, rồi `bash run.sh start`: tool đọc tiếp đúng chỗ dừng.
+
+## 10. Chi phí và tối ưu
+
+**Chi phí cố định:**
+
+| Khoản | Chi phí |
+|---|---|
+| Network Volume 50 GB | ~$3.5/tháng (~$0.07/GB/tháng), tính cả khi pod tắt |
+| Ổ container 30 GB | vài cent/ngày, chỉ tính khi pod chạy |
+| Mỗi lần Start pod | 3–5 phút cài lại gói Python (model đã nằm trên volume). Lần đầu thêm 5–10 phút tải model |
+| Ghép video 1 tập | 1–3 phút CPU, chạy song song với GPU nên **không tốn thêm tiền** |
+
+**Ví dụ cả bộ truyện 800 chương (80 tập, ~107 giờ audio), theo bảng ở mục 2:**
+
+| GPU | Thời gian chạy | Chi phí pod |
+|---|---|---|
+| RTX A5000 Community ($0.16) | ~27 giờ | **~$4–7** |
+| RTX 5090 ($0.69) | ~10 giờ | **~$7–10** |
+| RTX 4090 ($0.89) | ~12 giờ | ~$11 |
+| RTX PRO 4500 SE ($0.72) | ~16 giờ | ~$12 |
+| A40 ($0.59) | ~24 giờ | ~$14 |
+
+So với cách đọc cũ (~2× thời gian thực, ~53 giờ trên RTX PRO 4500 ≈ $38 cho 800 chương), chi phí ước tính giảm còn khoảng 1/3 đến 1/8.
+
+**Tác động của cấu hình lên tốc độ (ước tính):**
+
+| Thay đổi | Nhanh hơn | Ảnh hưởng chất lượng |
+|---|---|---|
+| `asr.model_id: vinai/PhoWhisper-medium` | ~10% | gần như không |
+| `tts.num_step: 24` | ~20–25% | nhẹ, nghe thử trước |
+| `asr.enabled: false` | ~15–25% | **không còn tự sửa câu vấp** (vẫn bắt câu câm, kẹt, cụt đuôi) |
+| `asr.max_attempts: 2` | ít (chỉ câu lỗi) | câu lỗi được ít cơ hội sửa hơn |
+| Giọng mẫu ngắn hơn (8–10 s thay vì 18,8 s) | ~10–20% | phải cắt đúng câu và sửa `.txt` cho khớp |
+
+**Mẹo tiết kiệm:**
+- **Đừng để pod chạy không**: chạy hết chương rồi Stop pod ngay.
+- Thêm nhiều chương một lần (vài trăm chương) để không mất thời gian cài đặt lặp lại.
+- Muốn nhanh hơn nữa (theo thứ tự ảnh hưởng chất lượng từ ít đến nhiều):
+  1. `asr.model_id: "vinai/PhoWhisper-medium"`: nghe lại nhanh hơn, vẫn bắt được lỗi vấp;
+  2. `tts.num_step: 24`: nhanh hơn khoảng 25%, nghe thử 1 chương trước khi áp dụng cả truyện;
+  3. `asr.enabled: false`: bỏ nghe lại (vẫn giữ kiểm tra tín hiệu: câu câm, kẹt, cụt đuôi).
+- Video nền chỉ được nén **1 lần** (đơn vị lặp, cache trong `work/video/`). Ghép mỗi tập chỉ nén audio, nên mất vài phút CPU, không tốn GPU.
+
+## 11. Sự cố thường gặp
+
+| Dấu hiệu | Cách xử lý |
+|---|---|
+| `PyTorch không thấy GPU` | chọn lại template RunPod PyTorch (CUDA) |
+| `Batch ... hết VRAM, chia nhỏ` liên tục | đặt `tts.batch_size` nhỏ hơn hoặc `batch_max_chars: 1200` |
+| Giọng đầu câu bị lạ / vấp | lời trong `voice_reference_clean.txt` không khớp giọng mẫu; sửa cho khớp từng chữ |
+| Một từ luôn đọc sai | thêm vào `input/glossary.json` |
+| Nhiều câu báo `sai xx% ký tự` dù nghe vẫn đúng | thường do tên riêng: thêm vào `input/names.txt` |
+| `Không sinh được audio cho câu ...` (dừng chương) | câu có ký tự lạ; sửa câu đó trong file `.txt` rồi chạy lại (các câu khác đã có cache) |
+| Video ra ngắn hơn audio | xem log `Video ra ...s nhưng audio ...s`; video nền hỏng, hãy thử file nền khác |
+| Upload lỗi | kiểm tra `rclone.conf`, `upload.remote_dir`; xem `work/upload.log` |
+| Muốn đọc lại 1 chương | `bash run.sh audio --range 15-15 --force` rồi xóa video tập chứa chương đó và chạy `bash run.sh video` |
