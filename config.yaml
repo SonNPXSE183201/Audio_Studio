@@ -45,7 +45,7 @@ tts:
   max_gain_db: 6
   fade_in_ms: 15
   fade_out_ms: 40
-  room_tone_db: -66             # khoảng nghỉ có "không khí phòng" rất nhỏ thay cho im lặng tuyệt đối
+  room_tone_db: null            # null = khoảng nghỉ im lặng tuyệt đối (như AI_Video_Studio); -66 = thêm "không khí phòng" (nghe như tiếng xì nền)
   pauses_ms:                    # nhịp nghỉ sau câu theo dấu câu
     comma: 220
     sentence: 380

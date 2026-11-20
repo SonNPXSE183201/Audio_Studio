@@ -47,7 +47,7 @@ POST_DEFAULTS: Dict[str, Any] = {
     "max_gain_db": 6,
     "fade_in_ms": 15,
     "fade_out_ms": 40,
-    "room_tone_db": -66,      # null = khoảng nghỉ im lặng tuyệt đối
+    "room_tone_db": None,     # None = khoảng nghỉ im lặng tuyệt đối (như AI_Video_Studio)
 }
 
 
