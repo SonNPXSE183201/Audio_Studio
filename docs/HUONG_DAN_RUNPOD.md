@@ -14,10 +14,12 @@ Mỗi lần tạo pod, mở Terminal và chạy (thay tên bộ truyện = tên 
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SonNPXSE183201/Audio_Studio/main/pod/bootstrap.sh \
-  | AUTO_RUN=1 PROJECTS="Giang_Than" JOBS=2 bash
+  | AUTO_RUN=1 PROJECTS="Đại Niết Bàn" JOBS=2 bash
 ```
 
-Nhiều bộ truyện: `PROJECTS="Giang_Than To_Vu Bo_Thu_Ba"`: chạy lần lượt từng bộ, bộ này xong mới sang bộ sau.
+Nhiều bộ truyện: ngăn cách bằng dấu `;`, ví dụ `PROJECTS="Đại Niết Bàn;Trọng sinh 2003: Giang Thần"`: chạy lần lượt từng bộ, bộ này xong mới sang bộ sau. Tên phải **giống hệt** tên thư mục trong `Dự án truyện` trên Drive (cả dấu, dấu cách).
+
+Thêm bộ mới: trên Drive copy thư mục `Dự án truyện/Sample`, đổi tên thành tên bộ, thả chương vào `chuong/`, giọng mẫu vào `voice/`, video nền vào `background/`, intro/watermark vào `Kenh/`. Video tự đổ về `video/`.
 
 Tool tự cài đặt, tự tải chương và tài nguyên từ Drive, bỏ qua các tập đã có trên Drive, đọc audio, ghép tập, upload. Xem tiến độ: `bash /root/Audio_Studio/run.sh log`.
 

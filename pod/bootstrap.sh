@@ -21,18 +21,14 @@ echo "[INFO] Cài đặt, log đầy đủ: ${LOG}"
 bash "${CODE_DIR}/pod/setup_pod.sh" 2>&1 | tee "${LOG}"
 
 # AUTO_RUN=1: cài xong tự chạy nền (lấy chương từ Drive -> đọc -> ghép tập -> upload).
-#   PROJECTS="Truyen_A Truyen_B"  các bộ truyện (tên thư mục trên Drive), chạy lần lượt từng bộ
-#   PROJECTS="Đại Niết Bàn;Truyen B"  tên có dấu cách -> ngăn cách các bộ bằng dấu ;
+#   PROJECTS="Đại Niết Bàn;Truyen B"  các bộ truyện (đúng tên thư mục trên Drive), NGĂN CÁCH BẰNG ;
+#                                     chạy lần lượt từng bộ
 #   JOBS=2                         số job đọc audio mỗi bộ (dùng chung GPU)
 if [[ "${AUTO_RUN:-0}" == "1" ]]; then
   if [[ -n "${PROJECTS:-}" ]]; then
     # Các bộ chạy NỐI TIẾP nhau trong nền (chung GPU, không tranh nhau).
-    # Tên bộ có dấu cách (vd "Đại Niết Bàn") -> ngăn cách các bộ bằng dấu ;
-    if [[ "${PROJECTS}" == *";"* ]]; then
-      IFS=';' read -r -a LIST <<<"${PROJECTS}"
-    else
-      read -r -a LIST <<<"${PROJECTS}"
-    fi
+    # Tên bộ có thể có dấu cách (vd "Đại Niết Bàn") -> các bộ ngăn cách bằng dấu ;
+    IFS=';' read -r -a LIST <<<"${PROJECTS}"
     CLEAN=()
     for p in "${LIST[@]}"; do
       p="$(echo "$p" | sed 's/^ *//;s/ *$//')"

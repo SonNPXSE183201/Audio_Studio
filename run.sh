@@ -68,7 +68,7 @@ case "${cmd}" in
   start)
     mkdir -p "${PID_DIR}" "${LOG_DIR}"
     if [[ -n "$(running_pids)" ]]; then
-      echo "[OK] Bộ truyện '${PROJECT:-mặc định}' đang chạy. Xem: bash run.sh status ${PROJECT:+--project ${PROJECT}}"
+      echo "[OK] Bộ truyện '${PROJECT:-mặc định}' đang chạy. Xem: bash run.sh status ${PROJECT:+--project \"${PROJECT}\"}"
       exit 0
     fi
     cd "${PROJECT_DIR}"
@@ -83,12 +83,12 @@ case "${cmd}" in
     VIDEO_ARGS=()
     for a in "${REST[@]}"; do [[ "$a" == "--finish" ]] && VIDEO_ARGS+=(--finish); done
     launch video video --watch "${PROJECT_ARGS[@]}" --job video "${VIDEO_ARGS[@]}"
-    echo "Xem tiến độ: bash run.sh log ${PROJECT:+--project ${PROJECT}}"
+    echo "Xem tiến độ: bash run.sh log ${PROJECT:+--project \"${PROJECT}\"}"
     ;;
   status)
     pids="$(running_pids)"
     if [[ -z "${pids}" ]]; then echo "Không có job nào đang chạy."; else
-      for f in ${pids}; do echo "  $(basename "$f" .pid): PID $(cat "$f")"; done
+      while IFS= read -r f; do echo "  $(basename "$f" .pid): PID $(cat "$f")"; done <<<"${pids}"
     fi
     base="${DATA_DIR}${PROJECT:+/projects/${PROJECT}}"
     echo "  Chương: $(find "${base}/input" -name 'Chuong_*.txt' 2>/dev/null | wc -l) | audio xong: $(ls "${base}/output/audio" 2>/dev/null | grep -c '\.wav$' || true) | tập xong: $(ls "${base}/output/video" 2>/dev/null | grep -c '\.done$' || true)"
@@ -100,7 +100,7 @@ case "${cmd}" in
   stop)
     pids="$(running_pids)"
     if [[ -z "${pids}" ]]; then echo "Không có job nào đang chạy."; exit 0; fi
-    for f in ${pids}; do kill -TERM "$(cat "$f")" && rm -f "$f" && echo "[OK] Đã dừng $(basename "$f" .pid)"; done
+    while IFS= read -r f; do kill -TERM "$(cat "$f")" && rm -f "$f" && echo "[OK] Đã dừng $(basename "$f" .pid)"; done <<<"${pids}"
     ;;
   run|audio|video|check|bench)
     cd "${PROJECT_DIR}"
