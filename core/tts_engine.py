@@ -229,6 +229,49 @@ class TTSEngine:
         return pauses
 
     @staticmethod
+    def candidate_segments(samples: np.ndarray, sr: int, max_seconds: float = 10.0,
+                           min_seconds: float = 4.0, limit: int = 4) -> List[Tuple[float, float]]:
+        """Các đoạn ứng viên làm giọng mẫu (để thử giọng): câu trọn vẹn tốt nhất + đoạn đầu file."""
+        total = samples.size / sr
+        if total <= max_seconds:
+            return [(0.0, total)]
+        pauses = TTSEngine.find_pauses(samples, sr)
+        edge = int(sr * 0.1)
+        peak_db = 20 * np.log10(float(np.max(np.abs(samples))) + 1e-9)
+
+        def quiet(seg: np.ndarray) -> bool:
+            return 20 * np.log10(float(np.sqrt(np.mean(seg ** 2))) + 1e-9) < peak_db - 35
+
+        bounds = ([(0.0, 0.4)] if quiet(samples[:edge]) else []) \
+            + [(t, length + max(0.0, (-floor - 40) / 100)) for t, length, floor in pauses] \
+            + ([(total, 0.4)] if quiet(samples[-edge:]) else [])
+        scored = []
+        for i, (a, sa) in enumerate(bounds):
+            for b, sb in bounds[i + 1:]:
+                if min_seconds <= b - a <= max_seconds:
+                    inner = sum(1 for t, _, _ in pauses if a < t < b)
+                    scored.append((2.0 * sa + 2.0 * sb + 0.1 * min(inner, 3) + 0.05 * (b - a), a, b))
+        out: List[Tuple[float, float]] = []
+        for _, a, b in sorted(scored, reverse=True):
+            if all(abs(a - x) > 0.5 or abs(b - y) > 0.5 for x, y in out):
+                out.append((a, b))
+            if len(out) >= limit - 1:
+                break
+        # Đoạn từ đầu file tới chỗ ngừng muộn nhất <= max (cách cũ, đo thực tế có lúc tốt nhất).
+        heads = [t for t, _, _ in pauses if min_seconds <= t <= max_seconds]
+        if heads and all(abs(a) > 0.5 or abs(b - heads[-1]) > 0.5 for a, b in out):
+            out.append((0.0, heads[-1]))
+        return out
+
+    @staticmethod
+    def segment(samples: np.ndarray, sr: int, a: float, b: float) -> np.ndarray:
+        cut = samples[int(a * sr): int(b * sr)].copy()
+        fade = int(sr * 0.03)
+        cut[:fade] *= np.linspace(0.0, 1.0, fade)
+        cut[-fade:] *= np.linspace(1.0, 0.0, fade)
+        return trim_silence(cut, sr, threshold_db=-45, lead_ms=60, tail_ms=150)
+
+    @staticmethod
     def cut_at_pause(samples: np.ndarray, sr: int, max_seconds: float = 10.0,
                      min_seconds: float = 4.0) -> Optional[np.ndarray]:
         """Chọn ĐOẠN CÂU TRỌN VẸN đẹp nhất (≤ max_seconds) làm giọng mẫu (None nếu đã đủ ngắn/không tìm được).

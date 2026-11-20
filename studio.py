@@ -20,6 +20,8 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 # Thư mục dữ liệu (chương, giọng mẫu, video nền, output). Trên pod đặt ở volume /workspace
@@ -307,38 +309,106 @@ class Studio:
 
         Giọng mẫu dài (vd 18s) làm OmniVoice đọc nối sang câu mới (thừa/mất chữ đầu câu) và chậm 2-3 lần.
         """
-        from core.audio_utils import read_wav, write_wav
-
         short = prepared.replace(".wav", f"_max{int(max(max_seconds, 0))}.wav")
         short_txt = short.replace(".wav", ".txt")
         if os.path.exists(short) and os.path.exists(short_txt):
             with open(short_txt, "r", encoding="utf-8") as handle:
                 return short, handle.read().strip()
-        samples, sr = read_wav(prepared)
-        cut = TTSEngine.cut_at_pause(samples, sr, max_seconds) if max_seconds > 0 else None
-        if cut is None:
-            if max_seconds > 0 and samples.size > sr * max_seconds:
-                log(f"Giọng mẫu dài {samples.size / sr:.1f}s nhưng không tìm được chỗ ngừng để cắt.", "Cảnh báo")
-            cut = samples
-        # Luôn nghe lại giọng mẫu: lời trong .txt phải KHỚP audio, lệch là đọc thừa/mất chữ đầu câu.
-        heard = self.audio().asr.transcribe(cut, sr) if self.audio().asr.enabled else None
-        if not heard:
+        # Nhiều job cùng lúc: chỉ một job chọn giọng mẫu, job khác chờ kết quả.
+        lock = short + ".lock"
+        if not locks.claim(lock, self.job, stale_sec=1800):
+            log("Job khác đang chọn giọng mẫu, chờ...", "Studio")
+            for _ in range(180):
+                time.sleep(5)
+                if os.path.exists(short) and os.path.exists(short_txt):
+                    with open(short_txt, "r", encoding="utf-8") as handle:
+                        return short, handle.read().strip()
+            locks.claim(lock, self.job, stale_sec=0)
+        try:
+            return self._pick_reference(prepared, ref_text, max_seconds, short, short_txt)
+        finally:
+            locks.release(lock)
+
+    def _pick_reference(self, prepared: str, ref_text: str, max_seconds: float,
+                        short: str, short_txt: str) -> Tuple[str, str]:
+        from core import audio_utils as au
+
+        samples, sr = au.read_wav(prepared)
+        total = samples.size / sr
+        asr = self.audio().asr
+        if max_seconds > 0 and total > max_seconds:
+            cands = TTSEngine.candidate_segments(samples, sr, max_seconds)
+        else:
+            cands = [(0.0, total)]
+        if not cands:
+            log(f"Giọng mẫu dài {total:.1f}s nhưng không tìm được chỗ ngừng để cắt.", "Cảnh báo")
+            cands = [(0.0, total)]
+        # Mỗi ứng viên: đoạn audio + lời khớp (ASR nghe lại; lời lệch audio -> thừa/mất chữ đầu câu).
+        options = []
+        for a, b in cands:
+            cut = samples if (a, b) == (0.0, total) else TTSEngine.segment(samples, sr, a, b)
+            heard = asr.transcribe(cut, sr) if asr.enabled else None
+            if heard and ref_text:
+                text, err = TTSEngine.match_transcript(ref_text, heard)
+            else:
+                text, err = (heard or ref_text), 0.0
+            if text:
+                options.append({"a": a, "b": b, "cut": cut, "text": text, "err": err})
+        if not options:
             log("Không nghe lại được giọng mẫu: dùng nguyên giọng mẫu và lời trong .txt.", "Cảnh báo")
             return prepared, ref_text
-        if ref_text:
-            text, err = TTSEngine.match_transcript(ref_text, heard)
-            if err > 0.2:
-                log(f"Lời mẫu lệch audio nhiều ({err:.0%}): ASR nghe «{heard}». Hãy sửa file .txt cho khớp.", "Cảnh báo")
-        else:
-            text = heard
-        if text != ref_text:
-            log(f"Lời mẫu đã chỉnh cho khớp audio: «{text}»", "Studio")
-        write_wav(short, cut, sr, float32=True)
+        best = options[0]
+        if len(options) > 1 and self.cfg.get("voice", {}).get("audition", True) and asr.enabled:
+            best = self._audition(options, samples, sr) or best
+        au.write_wav(short, best["cut"], sr, float32=True)
         with open(short_txt, "w", encoding="utf-8") as handle:
-            handle.write(text)
-        if cut.size != samples.size:
-            log(f"Giọng mẫu {samples.size / sr:.1f}s -> cắt còn {cut.size / sr:.1f}s ở chỗ ngừng tự nhiên.", "Studio")
-        return short, text
+            handle.write(best["text"])
+        log(f"Giọng mẫu {total:.1f}s -> dùng đoạn {best['a']:.1f}-{best['b']:.1f}s ({best['cut'].size / sr:.1f}s): "
+            f"«{best['text']}»", "Studio")
+        if best["err"] > 0.2:
+            log(f"Lời mẫu vẫn lệch audio {best['err']:.0%}: nên sửa file .txt cho khớp.", "Cảnh báo")
+        return short, best["text"]
+
+    def _audition(self, options, full: np.ndarray, sr: int):
+        """Thử giọng: mỗi đoạn mẫu đọc vài câu thật của truyện, chọn đoạn ít sai chữ + cao độ đều nhất."""
+        from core import audio_utils as au
+        from core.asr_checker import char_error_rate
+
+        files = self.chapter_files()
+        if not files:
+            return None
+        with open(files[0][1], "r", encoding="utf-8") as handle:
+            chunks = build_chunks(clean_paragraphs(handle.read()), int(self.cfg.get("tts", {}).get("max_chars", 160)))
+        texts = [c["tts"] for c in chunks if len(c["tts"]) >= 30][: int(self.cfg.get("voice", {}).get("audition_sentences", 12))]
+        if len(texts) < 4:
+            return None
+        base_f0 = au.median_f0(full, sr) or 0
+        builder = self.audio()
+        seed = int(self.cfg.get("tts", {}).get("seed", 1234))
+        log(f"Thử giọng: {len(options)} đoạn mẫu x {len(texts)} câu để chọn đoạn tốt nhất...", "Studio")
+        best, best_score = None, 1e9
+        for i, opt in enumerate(options):
+            wav = os.path.join(self.work_dir, "voice", f"audition_{i}.wav")
+            au.write_wav(wav, au.normalize_rms(opt["cut"], -20.0), sr, float32=True)
+            outs = []
+            for t in texts:
+                try:
+                    a, osr = builder.tts.synthesize(t, wav, opt["text"], seed)
+                    outs.append((t, a, osr))
+                except Exception as exc:  # noqa: BLE001
+                    log(f"  thử giọng lỗi: {exc}", "Cảnh báo")
+            if not outs:
+                continue
+            hyps = builder.asr.transcribe_batch([(a, osr) for _, a, osr in outs])
+            cer = [char_error_rate(t, h) if h else 1.0 for (t, _, _), h in zip(outs, hyps)]
+            st = [au.semitones(f, base_f0) for f in (au.median_f0(a, osr) for _, a, osr in outs) if f and base_f0]
+            st_arr = np.array(st) if st else np.array([9.0])
+            score = 10 * float(np.mean(cer)) + abs(float(np.median(st_arr))) + float(np.std(st_arr))
+            log(f"  đoạn {opt['a']:.1f}-{opt['b']:.1f}s: sai chữ {np.mean(cer):.1%}, cao độ {np.median(st_arr):+.2f} "
+                f"± {np.std(st_arr):.2f} bán cung -> điểm {score:.2f}", "Studio")
+            if score < best_score:
+                best, best_score = opt, score
+        return best
 
     def audio(self) -> AudioBuilder:
         if self._audio is None:
