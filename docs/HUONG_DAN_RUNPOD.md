@@ -6,11 +6,12 @@ Mục tiêu: đọc hàng trăm chương thành video với chi phí pod thấp 
 
 **Cách khuyên dùng: mọi thứ để trên Google Drive, pod mới chỉ cần 1 lệnh.**
 
-Chuẩn bị một lần (mục 5):
-1. Đưa chương `.txt`, giọng mẫu, video nền, intro/watermark lên các thư mục Drive.
-2. Khai 2 biến môi trường trong template RunPod: `RCLONE_CONF_B64` và `STUDIO_CONFIG_B64`.
+Chuẩn bị một lần (đã làm xong; chi tiết ở mục 3 và 5):
+1. Drive: `Dự án truyện/<tên bộ>/` gồm `chuong/`, `voice/`, `background/`, `Kenh/`, `video/` (copy từ `Dự án truyện/Sample`).
+2. RunPod **Secret** `rclone_conf` = nội dung `rclone.conf` mã hóa base64.
+3. RunPod **Template** `Audio Studio` (image PyTorch CUDA 12.8, ổ 40 GB, biến `RCLONE_CONF_B64`).
 
-Mỗi lần tạo pod, mở Terminal và chạy (thay tên bộ truyện = tên thư mục trên Drive):
+Mỗi lần chạy: **Pods → Deploy** → chọn GPU → template **Audio Studio** → Deploy. Pod lên thì **Connect → Jupyter (8888) → Terminal** và chạy (tên bộ = tên thư mục trên Drive):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/SonNPXSE183201/Audio_Studio/main/pod/bootstrap.sh \
@@ -25,20 +26,17 @@ Tool tự cài đặt, tự tải chương và tài nguyên từ Drive, bỏ qua
 
 Thêm chương mới lên Drive trong lúc pod đang chạy: tool tự lấy về sau tối đa 20 phút.
 
-## 1. Tài khoản và volume
+## 1. Tài khoản và lưu trữ
 
-- Tạo **Network Volume** khoảng **50 GB**, cùng vùng (datacenter) với GPU định thuê. Volume giữ model (~10 GB), chương, audio và video đang chờ upload. Code nằm ở ổ container và tự clone lại sau mỗi lần Start.
-- Tất cả dữ liệu nằm ở `/workspace/audio_studio`. Stop/Terminate pod không làm mất dữ liệu trên volume.
+### Mặc định: không cần Network Volume (template Audio Studio)
 
-### Chạy không cần Network Volume
-
-Nếu video được đẩy hết lên Drive thì có thể bỏ volume: chỉ cần **ổ container ~40 GB** (model ~6 GB, audio 20 chương, video tập đang chờ upload).
+Chương lấy từ Drive, video đẩy về Drive, nên chỉ cần **ổ container 40 GB** (model ~6 GB, audio 20 chương, video tập đang chờ upload).
 - Mỗi lần tạo pod mới phải cài lại và tải lại model: **~10 phút**.
 - Stop/Terminate pod là mất những gì **chưa lên Drive** (tối đa ~20 chương đang làm dở): nên thuê **On-Demand**, không thuê Spot.
 - Pod mới tự biết tập nào đã xong nhờ xem thư mục video trên Drive (`sync.skip_uploaded: true`), không cần nhớ `--range`.
 - `upload.delete_audio_after_upload: true` (mặc định) giữ ổ container không đầy.
 
-**Chi phí bộ 1.500 chương (~200 giờ audio, 150 tập), không volume:**
+**Chi phí bộ 1.500 chương (~200 giờ audio, 75 tập × 20 chương), không volume:**
 
 | GPU (giá/giờ) | 1 job | 2 job / 1 pod | 2 pod × 1 job |
 |---|---|---|---|
@@ -105,9 +103,19 @@ Kết quả mẫu:
 
 ## 3. Deploy pod
 
-- Template: **RunPod PyTorch** (2.4 trở lên, CUDA 12.x).
-- Container disk: 30 GB. Volume: gắn Network Volume ở `/workspace`.
-- Mở cổng Jupyter (8888) nếu muốn kéo-thả file qua trình duyệt.
+Dùng template **Audio Studio** đã tạo sẵn (RunPod → **Templates**). Cấu hình của template, nếu cần tạo lại:
+
+| Mục | Giá trị |
+|---|---|
+| Template name | `Audio Studio` (Type: Pod, Compute: NVIDIA GPU, Private) |
+| Container image | `runpod/pytorch:1.0.3-cu1281-torch280-ubuntu2404` (CUDA 12.8: chạy cả RTX 5090 / PRO 4500) |
+| Container disk | **40 GB** (model ~6 GB + audio 20 chương + video 1 tập ~8 GB) |
+| Volume | 0 GB: không cần, mọi thứ lấy từ / đẩy về Google Drive |
+| HTTP port | `Jupyter` 8888 (mở Terminal, kéo-thả file) |
+| TCP port | `SSH` 22 |
+| Environment variable | `RCLONE_CONF_B64` = `{{ RUNPOD_SECRET_rclone_conf }}` (bấm biểu tượng chìa khóa ở ô value để chọn secret) |
+
+Khi Deploy: chọn **On-Demand** (Spot bị thu hồi thì mất phần chưa lên Drive, tối đa ~20 chương), GPU theo bảng ở mục 2, ≥ 4 vCPU và ≥ 16 GB RAM.
 
 ## 4. Cài đặt (chạy lại sau mỗi lần Start pod)
 
@@ -130,46 +138,51 @@ Log cài đặt nằm ở `/workspace/audio_studio_setup.log`.
 ### 5.1. Sắp xếp thư mục trên Drive
 
 ```
-Dự án truyện/Ten_truyen/
-├── chuong/        Chuong_0001.txt ... Chuong_1500.txt (+ glossary.json, names.txt nếu có)
-├── voice/         voice_reference_clean.wav + voice_reference_clean.txt
-├── background/    background.mp4
-├── Kenh/          Script_Intro.mp3, Script_Watermark.mp3, Script_Watermark1.mp3
-└── video/         tool upload video tập vào đây (tự tạo)
+Drive của tôi/Dự án truyện/
+├── Sample/            thư mục mẫu (chuong, voice, background, Kenh, video): copy + đổi tên cho bộ mới
+└── Đại Niết Bàn/      tên thư mục = tên bộ truyện trong PROJECTS
+    ├── chuong/        Chuong_0001.txt ... Chuong_1500.txt (+ glossary.json, names.txt nếu có)
+    ├── voice/         voice_reference_clean.wav + voice_reference_clean.txt
+    ├── background/    background.mp4
+    ├── Kenh/          Script_Intro.mp3, Script_Watermark.mp3, Script_Watermark1.mp3
+    └── video/         tool upload video tập vào đây
 ```
 
-### 5.2. Sửa `config.yaml`
+Tên bộ có dấu, dấu cách, dấu `:` đều được, miễn **giống hệt** tên thư mục trên Drive.
+
+### 5.2. `config.yaml`: không cần sửa
+
+`config.yaml` trong code đã trỏ đúng cấu trúc trên; `{project}` được thay bằng tên bộ khi chạy:
 
 ```yaml
 sync:
-  enabled: true
-  input: "gdrive:Dự án truyện/Ten_truyen/chuong"
+  enabled: auto        # tự bật khi pod có rclone.conf
+  input: "gdrive:Dự án truyện/{project}/chuong"
   assets:
-    assets/voice: "gdrive:Dự án truyện/Ten_truyen/voice"
-    assets/background: "gdrive:Dự án truyện/Ten_truyen/background"
-    Kenh: "gdrive:Dự án truyện/Ten_truyen/Kenh"
+    assets/voice: "gdrive:Dự án truyện/{project}/voice"
+    assets/background: "gdrive:Dự án truyện/{project}/background"
+    Kenh: "gdrive:Dự án truyện/{project}/Kenh"
 upload:
-  enabled: true
-  remote_dir: "gdrive:Dự án truyện/Ten_truyen/video"
+  enabled: auto
+  remote_dir: "gdrive:Dự án truyện/{project}/video"
 ```
 
-### 5.3. Khai báo một lần trong RunPod (pod mới tự có, không phải chép file)
+Bộ nào cần cấu hình khác (vd. giữ 10 chương/tập) thì tạo `/workspace/audio_studio/projects/<tên bộ>/config.yaml`, chỉ ghi những dòng muốn đổi.
 
-Trên máy Windows, mở PowerShell và mã hóa 2 file thành chuỗi base64:
+### 5.3. `rclone.conf` qua RunPod Secret (làm một lần, pod nào cũng tự có)
 
-```powershell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes("$env:APPDATA\rclone\rclone.conf")) | Set-Clipboard   # dán vào RCLONE_CONF_B64
-[Convert]::ToBase64String([IO.File]::ReadAllBytes("D:\duong_dan\config.yaml")) | Set-Clipboard          # dán vào STUDIO_CONFIG_B64
-```
+`rclone.conf` là "chìa khóa" vào Google Drive, nên **pod không thể tự lấy nó từ Drive**. Thay vào đó, lưu nó trong RunPod Secret:
 
-Trên RunPod: **Secrets** → tạo secret `rclone_conf` (dán chuỗi thứ nhất) và `studio_config` (dán chuỗi thứ hai). Khi Deploy pod (hoặc trong template), mục **Environment Variables**:
+1. Trên máy Windows, mở PowerShell, chép chuỗi base64 vào clipboard:
+   ```powershell
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("D:\Dự án truyện\Tool\rclone.conf")) | Set-Clipboard
+   ```
+2. RunPod → **Secrets** → **Create secret**: tên `rclone_conf`, giá trị: Ctrl+V.
+3. Template **Audio Studio** đã có biến `RCLONE_CONF_B64` = `{{ RUNPOD_SECRET_rclone_conf }}` (mục 3).
 
-| Key | Value |
-|---|---|
-| `RCLONE_CONF_B64` | `{{ RUNPOD_SECRET_rclone_conf }}` |
-| `STUDIO_CONFIG_B64` | `{{ RUNPOD_SECRET_studio_config }}` |
+Kiểm tra trên pod: log cài đặt có dòng `[OK] rclone.conf từ biến RCLONE_CONF_B64`. Nếu báo lỗi base64, làm lại bước 1 rồi dán đè vào secret. Đổi tài khoản Drive hoặc token bị thu hồi thì cũng chỉ cần cập nhật secret.
 
-Dùng Secret để token Google Drive không hiện ra trong cấu hình pod. Lưu template lại thì lần sau chỉ cần chọn template và Deploy. Đổi cấu hình thì cập nhật secret `studio_config`.
+(Tùy chọn) Muốn thay cả `config.yaml` mà không sửa code: tạo secret `studio_config` từ file config mã hóa base64, thêm biến `STUDIO_CONFIG_B64` = `{{ RUNPOD_SECRET_studio_config }}` vào template.
 
 ### 5.4. Hoặc chép tay lên pod
 
@@ -230,10 +243,10 @@ bash run.sh video --finish
 ### Nhiều bộ truyện, nhiều job
 
 ```bash
-bash run.sh start --project Giang_Than --jobs 2   # 2 job audio tự chia chương + 1 job video chạy ngầm
-bash run.sh status --project Giang_Than
-bash run.sh log --project Giang_Than
-bash run.sh stop --project Giang_Than
+bash run.sh start --project "Đại Niết Bàn" --jobs 2   # 2 job audio tự chia chương + 1 job video chạy ngầm
+bash run.sh status --project "Đại Niết Bàn"
+bash run.sh log --project "Đại Niết Bàn"
+bash run.sh stop --project "Đại Niết Bàn"
 ```
 
 - Mỗi bộ truyện có dữ liệu riêng ở `/workspace/audio_studio/projects/<tên>/`, lấy chương từ `gdrive:Dự án truyện/<tên>/chuong` (theo `{project}` trong `config.yaml`).
@@ -244,8 +257,8 @@ bash run.sh stop --project Giang_Than
 **2 pod cho một bộ truyện:** khóa chương chỉ có tác dụng trong cùng một pod, nên 2 pod phải chia chương bằng `--range` theo bội số 20:
 
 ```bash
-bash run.sh start --project Giang_Than --range 1-750      # pod 1
-bash run.sh start --project Giang_Than --range 751-1500   # pod 2
+bash run.sh start --project "Đại Niết Bàn" --range 1-750      # pod 1
+bash run.sh start --project "Đại Niết Bàn" --range 751-1500   # pod 2
 ```
 
 ## 8. Xem tool đang làm gì
@@ -314,8 +327,8 @@ So với cách đọc cũ (~2× thời gian thực, ~53 giờ trên RTX PRO 4500
 | `PyTorch không thấy GPU` | chọn lại template RunPod PyTorch (CUDA) |
 | `Batch ... hết VRAM, chia nhỏ` liên tục | đặt `tts.batch_size` nhỏ hơn hoặc `batch_max_chars: 1200` |
 | Giọng đầu câu bị lạ / vấp | lời trong `voice_reference_clean.txt` không khớp giọng mẫu; sửa cho khớp từng chữ |
-| Một từ luôn đọc sai | thêm vào `input/glossary.json` |
-| Nhiều câu báo `sai xx% ký tự` dù nghe vẫn đúng | thường do tên riêng: thêm vào `input/names.txt` |
+| Một từ luôn đọc sai | thêm vào `chuong/glossary.json` trên Drive |
+| Nhiều câu báo `sai xx% ký tự` dù nghe vẫn đúng | thường do tên riêng: thêm vào `chuong/names.txt` trên Drive |
 | `Không sinh được audio cho câu ...` (dừng chương) | câu có ký tự lạ; sửa câu đó trong file `.txt` rồi chạy lại (các câu khác đã có cache) |
 | Video ra ngắn hơn audio | xem log `Video ra ...s nhưng audio ...s`; video nền hỏng, hãy thử file nền khác |
 | Upload lỗi | kiểm tra `rclone.conf`, `upload.remote_dir`; xem `work/upload.log` |

@@ -9,7 +9,12 @@ Biến chương truyện chữ tiếng Việt thành **video đọc truyện** �
 
 Chạy bằng terminal trên RunPod (hoặc máy có GPU NVIDIA). Đọc audio bằng GPU, ghép video bằng CPU **chạy song song**, nên pod không lúc nào ngồi chờ.
 
-**Bạn chỉ cần thả file chương `.txt` vào `input/`, tool tự làm phần còn lại.**
+**Bạn chỉ cần thả file chương `.txt` lên Google Drive, deploy pod bằng template `Audio Studio` rồi chạy 1 lệnh:** tool tự tải chương, đọc, ghép tập 20 chương và đẩy video về Drive.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SonNPXSE183201/Audio_Studio/main/pod/bootstrap.sh \
+  | AUTO_RUN=1 PROJECTS="Đại Niết Bàn" JOBS=2 bash
+```
 
 > Hướng dẫn từng bước trên RunPod, bảng **thời gian và chi phí theo từng loại GPU**: [docs/HUONG_DAN_RUNPOD.md](docs/HUONG_DAN_RUNPOD.md)
 >
@@ -20,7 +25,7 @@ Chạy bằng terminal trên RunPod (hoặc máy có GPU NVIDIA). Đọc audio b
 | Bước | Tool làm gì | Tự kiểm tra |
 |---|---|---|
 | Làm sạch | Bỏ bảng chuẩn hóa danh xưng, dòng "NGUYÊN TÁC/Thời gian", `***`; sửa dấu câu dính chữ; `c·hết` → `chết` | — |
-| Chuẩn hóa để đọc | Số (`1.500` → một nghìn năm trăm), %, giờ, đơn vị, tiền tệ, `Lv`, `【】`, từ mượn (hack, game, VIP…) | cách đọc riêng trong `input/glossary.json` |
+| Chuẩn hóa để đọc | Số (`1.500` → một nghìn năm trăm), %, giờ, đơn vị, tiền tệ, `Lv`, `【】`, từ mượn (hack, game, VIP…) | cách đọc riêng trong `chuong/glossary.json` (Drive) |
 | Chia câu | Mỗi đoạn đọc là **câu trọn vẹn** (≤ 220 ký tự); chỉ cắt ở dấu phẩy khi câu quá dài | nhịp nghỉ theo dấu câu, đoạn văn, lời thoại |
 | Đọc | OmniVoice clone giọng mẫu; **giọng mẫu mã hóa 1 lần**, **nhiều câu sinh cùng lúc** (batch theo VRAM) | — |
 | Một giọng xuyên suốt | Giọng mẫu giữ nguyên nhịp ngắt nghỉ tự nhiên; đo **cao độ từng câu so với giọng mẫu**, lệch quá 1,5 bán cung thì đọc lại và chọn bản gần giọng mẫu nhất | không còn câu cao câu thấp |
@@ -47,25 +52,29 @@ Mọi bước có cache: pod tắt giữa chừng thì lần sau chạy tiếp t
 | Câu to câu nhỏ, im lặng tuyệt đối giữa câu | nghe giật cục | cân bằng độ to, room tone, fade mềm |
 | Mỗi câu mã hóa lại giọng mẫu, sinh từng câu một | chậm, tốn tiền pod | mã hóa 1 lần, sinh theo batch |
 
-## Chuẩn bị dữ liệu
+## Chuẩn bị dữ liệu (Google Drive)
 
-**Cách khuyên dùng:** để chương và tài nguyên trên **Google Drive** rồi bật `sync.enabled: true`. Mỗi lần chạy, tool tự tải chương mới, giọng mẫu, video nền, intro về; tập nào đã có trên Drive thì bỏ qua. Pod mới chỉ cần 1 lệnh (xem [hướng dẫn RunPod, mục 5](docs/HUONG_DAN_RUNPOD.md#5-dữ-liệu-tự-lấy-từ-google-drive-khuyên-dùng)).
-
-Cấu trúc thư mục (trên Drive hoặc chép tay lên pod):
+Mỗi bộ truyện là một thư mục trong **`Drive của tôi / Dự án truyện /`**. Tên thư mục chính là tên bộ truyện đưa vào `PROJECTS` (giữ nguyên dấu, dấu cách):
 
 ```
-input/
-  Chuong_0001.txt, Chuong_0002.txt ...   số chương lấy từ tên file
-  glossary.json   (tùy chọn) cách đọc riêng: {"Lv": "cấp", "QQ": "qui qui", "Tô Vũ": "Tô Vũ"}
-  names.txt       (tùy chọn) mỗi dòng 1 tên riêng: ASR không tính sai ở các tên này
-assets/voice/
-  voice_reference_clean.wav   giọng mẫu 6–20 giây, sạch, không nhạc nền
-  voice_reference_clean.txt   lời đọc KHỚP CHÍNH XÁC với giọng mẫu (thiếu thì ASR tự nghe ra)
-assets/background/
-  background.mp4              video nền ngắn, lặp đến hết audio
-Kenh/
-  Script_Intro.mp3, Script_Watermark.mp3, Script_Watermark1.mp3   (tùy chọn)
+Dự án truyện/
+├── Sample/                ← thư mục mẫu: copy rồi đổi tên thành tên bộ mới
+├── Đại Niết Bàn/
+│   ├── chuong/            Chuong_0001.txt, Chuong_0002.txt … (số chương lấy từ tên file)
+│   │                      glossary.json (tùy chọn) cách đọc riêng: {"Lv": "cấp", "QQ": "qui qui"}
+│   │                      names.txt     (tùy chọn) mỗi dòng 1 tên riêng: ASR không tính sai các tên này
+│   ├── voice/             voice_reference_clean.wav  giọng mẫu 6–20 giây, sạch, không nhạc nền
+│   │                      voice_reference_clean.txt  lời đọc KHỚP CHÍNH XÁC với giọng mẫu
+│   ├── background/        background.mp4  video nền 1–2 phút, lặp đến hết audio
+│   ├── Kenh/              Script_Intro.mp3 (đầu tập), Script_Watermark.mp3 (trước chương 9),
+│   │                      Script_Watermark1.mp3 (trước chương 17); thiếu file nào thì bỏ qua chỗ đó
+│   └── video/             tool tự đẩy Chuong_0001-0020_Tap001.mp4 … vào đây
+└── <bộ khác>/ …
 ```
+
+- **Thêm bộ mới:** copy `Sample`, đổi tên, thả file vào từng thư mục con, chạy pod với `PROJECTS="<tên y hệt trên Drive>"`.
+- Tool **tự bật Drive** khi pod có `rclone.conf` (lấy từ RunPod Secret, xem [hướng dẫn mục 5](docs/HUONG_DAN_RUNPOD.md#5-dữ-liệu-tự-lấy-từ-google-drive-khuyên-dùng)). Cứ 20 phút tool xem Drive có chương mới không; tập đã có trong `video/` thì bỏ qua, nên pod mới tự chạy tiếp từ chỗ dở.
+- Mẫu thư mục cũng có trong repo: `drive_template/Sample/` (kèm `HUONG_DAN.txt`).
 
 Giọng mẫu càng sạch thì giọng đọc càng sạch: không tiếng vang, không nhạc, không tiếng ồn. Lời trong file `.txt` phải khớp từng chữ với giọng mẫu, nếu sai thì giọng đọc dễ vấp ở đầu câu.
 
@@ -77,12 +86,14 @@ Giọng mẫu càng sạch thì giọng đọc càng sạch: không tiếng vang
 - **Một job video chạy ngầm** (CPU): mỗi phút quét audio, đủ 20 chương liên tiếp là ghép tập + upload; mỗi tập chỉ một job được ghép (khóa `tapNNN.lock`). Tự dừng khi các job audio đã xong.
 
 ```bash
-bash run.sh start --project Giang_Than --jobs 2     # 2 job audio + 1 job video
-bash run.sh status --project Giang_Than             # job đang chạy, số chương / audio / tập đã xong
-bash run.sh log --project Giang_Than
-bash run.sh stop --project Giang_Than
+bash run.sh start --project "Đại Niết Bàn" --jobs 2     # 2 job audio + 1 job video
+bash run.sh status --project "Đại Niết Bàn"             # job đang chạy, số chương / audio / tập đã xong
+bash run.sh log --project "Đại Niết Bàn"
+bash run.sh stop --project "Đại Niết Bàn"
 
-bash pod/run_projects.sh --jobs 2 Giang_Than To_Vu  # nhiều bộ: chạy lần lượt từng bộ
+# Nhiều bộ, chạy lần lượt (bộ này xong mới sang bộ sau):
+bash pod/run_projects.sh --jobs 2 "Đại Niết Bàn" "Trọng sinh 2003: Giang Thần"
+# hoặc khi tạo pod: PROJECTS="Đại Niết Bàn;Trọng sinh 2003: Giang Thần"   (ngăn cách bằng dấu ;)
 ```
 
 ## Lệnh thường dùng
@@ -132,18 +143,18 @@ Audio_Studio/
 └── tests/                  Kiểm thử: python -m pytest tests
 ```
 
-### Dữ liệu (trên pod: `/workspace/audio_studio`, không mất khi Stop pod)
+### Dữ liệu trên pod (`/workspace/audio_studio`; mỗi bộ truyện nằm riêng trong `projects/<tên bộ>/` với cùng cấu trúc)
 
 ```
 /workspace/audio_studio/
 ├── config.yaml             Cấu hình bạn sửa (ưu tiên hơn bản trong code)
-├── rclone.conf             Google Drive
+├── rclone.conf             Google Drive (tự ghi từ RunPod Secret RCLONE_CONF_B64)
 ├── input/                  Chương .txt, glossary.json, names.txt
 ├── assets/voice/           Giọng mẫu
 ├── assets/background/      Video nền
 ├── Kenh/                   Intro, watermark
 ├── output/audio/           Chuong_0001.wav … (WAV 24-bit đã hậu kỳ)
-├── output/video/           Chuong_0001-0010_Tap001.mp4 (hoặc .done sau khi lên Drive)
+├── output/video/           Chuong_0001-0020_Tap001.mp4 (hoặc .done sau khi lên Drive)
 ├── work/
 │   ├── tts/                Câu đã đọc (cache, tự xóa sau khi xong chương)
 │   ├── chXXXX/timeline.json  Mốc thời gian từng câu + danh sách câu còn nghi lỗi (warnings)
@@ -161,8 +172,8 @@ Audio_Studio/
 | Nghỉ lâu hơn giữa câu, đoạn | `tts.pauses_ms` |
 | Nhanh hơn (rẻ hơn) | `tts.num_step: 24` (nghe thử trước), `asr.model_id: vinai/PhoWhisper-medium`, hoặc `asr.enabled: false` |
 | Đọc chậm/nhanh | `tts.speed` (nên giữ 1.0) |
-| Một từ bị đọc sai | thêm vào `input/glossary.json`: `{"từ gốc": "cách đọc"}` |
-| ASR báo sai ở tên nhân vật | thêm tên vào `input/names.txt` |
+| Một từ bị đọc sai | thêm vào `chuong/glossary.json` trên Drive: `{"từ gốc": "cách đọc"}` |
+| ASR báo sai ở tên nhân vật | thêm tên vào `chuong/names.txt` trên Drive |
 | Giọng câu cao câu thấp | hạ `asr.max_pitch_dev_st` (vd. 1.0: khóa cao độ chặt hơn, đọc lại nhiều hơn) hoặc hạ `tts.position_temperature` |
 | Đọc vội, không ngắt hơi | giữ `tts.preprocess_prompt: false`; dùng giọng mẫu có ngắt nghỉ tự nhiên |
 | Nghe lẹt xẹt | `tts.dtype: auto` (bf16 trên GPU đời mới) hoặc `fp32` |
