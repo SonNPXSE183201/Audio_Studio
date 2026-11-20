@@ -26,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/SonNPXSE183201/Audio_Studio/main/po
 |---|---|---|
 | Làm sạch | Bỏ bảng chuẩn hóa danh xưng, dòng "NGUYÊN TÁC/Thời gian", `***`; sửa dấu câu dính chữ; `c·hết` → `chết` | — |
 | Chuẩn hóa để đọc | Số (`1.500` → một nghìn năm trăm), %, giờ, đơn vị, tiền tệ, `Lv`, `【】`, từ mượn (hack, game, VIP…) | cách đọc riêng trong `chuong/glossary.json` (Drive) |
-| Chia câu | Mỗi đoạn đọc là **câu trọn vẹn** (≤ 160 ký tự, như AI_Video_Studio); chỉ cắt ở dấu phẩy khi câu quá dài | nhịp nghỉ theo dấu câu, đoạn văn, lời thoại |
+| Chia câu | Mỗi đoạn đọc là **câu trọn vẹn** (≤ 300 ký tự: giữ câu trọn vẹn, không cắt đôi ở dấu phẩy); chỉ cắt ở dấu phẩy khi câu quá dài | nhịp nghỉ theo dấu câu, đoạn văn, lời thoại |
 | Đọc | OmniVoice clone giọng mẫu giống hệt cách của AI_Video_Studio: **fp16**, **mỗi câu sinh riêng với cùng seed** (ngữ điệu đồng đều), giọng mẫu mã hóa 1 lần; muốn nhanh thì chạy nhiều job song song | — |
 | Một giọng xuyên suốt | Giọng mẫu giữ nguyên nhịp ngắt nghỉ tự nhiên; đo **cao độ từng câu so với giọng mẫu**, lệch quá 1,5 bán cung thì đọc lại và chọn bản gần giọng mẫu nhất | không còn câu cao câu thấp |
 | Nghe lại | Kiểm tra tốc độ đọc, khoảng câm giữa câu, đuôi câu cụt; **PhoWhisper nghe lại theo batch**: sai > 12% ký tự hoặc lặp từ thì đọc lại (seed khác, tối đa 3 lượt) | vẫn lỗi thì **tách đôi câu** đọc từng nửa; không bao giờ bỏ qua câu |

@@ -22,7 +22,7 @@ tts:
   # Cách sinh giọng giống hệt AI_Video_Studio (giọng mượt, không sước):
   language: null                # null như AI_Video_Studio (OmniVoice tự nhận tiếng Việt)
   dtype: "auto"                 # auto = fp16 (fp32 trên GTX 16xx). KHÔNG dùng bf16: giải mã âm thanh kém chính xác -> rè, sước
-  speed: 1.0
+  speed: 0.9                    # 0.9 = chậm hơn giọng mẫu 10%, thong thả hơn cho truyện dài
   preprocess_prompt: true       # mặc định OmniVoice (như AI_Video_Studio): bỏ khoảng lặng thừa trong giọng mẫu
                                 # để model ước lượng đúng tốc độ nói -> không tự chèn ngắt quãng giữa câu
   position_temperature: 5.0     # mặc định OmniVoice
@@ -34,7 +34,8 @@ tts:
                                 # auto = nhiều câu một lượt (nhanh hơn nhưng mỗi câu một kiểu ngữ điệu)
   batch_max_chars: 1800         # tổng ký tự tối đa mỗi batch (hạ nếu báo hết VRAM)
   save_every: 64                # lưu cache sau mỗi N câu (chạy lại không mất việc)
-  max_chars: 160                # như AI_Video_Studio: câu ngắn giảm vấp, nuốt chữ (cắt ở dấu phẩy khi dài hơn)
+  max_chars: 300                # giữ CÂU TRỌN VẸN: cắt câu ở dấu phẩy làm mỗi nửa câu hạ giọng như hết câu
+                                # -> nghe "dừng đột ngột". Câu đọc lỗi vẫn được tự tách đôi để đọc lại.
   merge_sentences: true
   keep_chunk_cache: false       # false: xóa câu thô sau khi xong chương (tiết kiệm ổ pod)
   # Hậu kỳ từng câu
@@ -47,12 +48,12 @@ tts:
   fade_out_ms: 40
   room_tone_db: null            # null = khoảng nghỉ im lặng tuyệt đối (như AI_Video_Studio); -66 = thêm "không khí phòng" (nghe như tiếng xì nền)
   pauses_ms:                    # nhịp nghỉ sau câu theo dấu câu
-    comma: 220
-    sentence: 380
-    question: 440
-    ellipsis: 560
-    paragraph: 650
-    dialogue: 700
+    comma: 260
+    sentence: 480
+    question: 520
+    ellipsis: 650
+    paragraph: 800
+    dialogue: 850
     title: 1200
 
 # --- Nghe lại bằng ASR để đọc lại câu vấp / nuốt chữ / lặp từ ---
