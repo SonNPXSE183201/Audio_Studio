@@ -476,3 +476,33 @@ class ReferenceCutTests(unittest.TestCase):
         text2, _ = TTSEngine.match_transcript(full, heard2)
         self.assertTrue(text2.startswith("đang làm trâu"), text2)
         self.assertTrue(text2.endswith("giấc ngủ."), text2)
+
+
+class BreathTests(unittest.TestCase):
+    def _lowpass_noise(self, n, sr, cutoff, level, seed):
+        rng = np.random.default_rng(seed)
+        spec = np.fft.rfft(rng.standard_normal(n))
+        spec[np.fft.rfftfreq(n, 1 / sr) > cutoff] = 0
+        x = np.fft.irfft(spec, n)
+        return (x / (np.sqrt(np.mean(x ** 2)) + 1e-9) * level).astype(np.float32)
+
+    def test_breath_removed_voice_and_fricative_kept(self):
+        from core import audio_utils as au
+
+        sr = 24000
+        t = np.arange(int(sr * 1.0)) / sr
+        vowel = (0.3 * np.sin(2 * np.pi * 220 * t) + 0.1 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+        silence = np.zeros(int(sr * 0.3), dtype=np.float32)
+        breath = self._lowpass_noise(int(sr * 0.25), sr, 2500, 0.004, 1)           # hít vào: ~ -48 dB, phổ thấp
+        hiss = np.fft.irfft(np.where(np.fft.rfftfreq(int(sr * 0.25), 1 / sr) > 5000,
+                                     np.fft.rfft(np.random.default_rng(2).standard_normal(int(sr * 0.25))), 0), int(sr * 0.25))
+        fric = (hiss / np.sqrt(np.mean(hiss ** 2)) * 0.02).astype(np.float32)         # "s": phổ cao
+        x = np.concatenate([silence, breath, vowel, silence, fric, vowel])
+        y = au.suppress_breaths(x, sr)
+        b0, b1 = silence.size, silence.size + breath.size
+        self.assertLess(np.sqrt(np.mean(y[b0 + 600:b1 - 600] ** 2)), 0.004 * 0.1)        # tiếng thở giảm mạnh
+        v0 = b1
+        self.assertAlmostEqual(float(np.sqrt(np.mean(y[v0:v0 + vowel.size] ** 2))),
+                               float(np.sqrt(np.mean(vowel ** 2))), delta=0.01)          # nguyên âm giữ nguyên
+        f0 = v0 + vowel.size + silence.size
+        self.assertGreater(np.sqrt(np.mean(y[f0:f0 + fric.size] ** 2)), 0.015)          # phụ âm "s" giữ nguyên

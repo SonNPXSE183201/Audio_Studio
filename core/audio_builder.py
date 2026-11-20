@@ -31,6 +31,7 @@ from core.audio_utils import (
     resample,
     room_tone,
     semitones,
+    suppress_breaths,
     tail_level_db,
     trim_silence,
     write_wav,
@@ -48,6 +49,8 @@ POST_DEFAULTS: Dict[str, Any] = {
     "fade_in_ms": 15,
     "fade_out_ms": 40,
     "room_tone_db": None,     # None = khoảng nghỉ im lặng tuyệt đối (như AI_Video_Studio)
+    "suppress_breaths": True,  # giảm tiếng lấy hơi model tự sinh (nhiều khi speed < 1)
+    "breath_reduce_db": -30,
 }
 
 
@@ -111,6 +114,9 @@ class AudioBuilder:
     # ------------------------------------------------------------ chunk audio
     def postprocess(self, samples: np.ndarray, sr: int) -> np.ndarray:
         p = self.post
+        if p.get("suppress_breaths", True):
+            # Trước khi cắt lặng: tiếng hít vào ở đầu câu thành im lặng -> bị cắt bỏ luôn.
+            samples = suppress_breaths(samples, sr, float(p.get("breath_reduce_db", -30)))
         out = trim_silence(samples, sr, float(p["trim_silence_db"]), int(p["lead_ms"]), int(p["tail_ms"]))
         return normalize_voiced(out, sr, float(p["target_db"]), float(p["max_gain_db"]))
 

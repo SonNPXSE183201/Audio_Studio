@@ -22,7 +22,7 @@ tts:
   # Cách sinh giọng giống hệt AI_Video_Studio (giọng mượt, không sước):
   language: null                # null như AI_Video_Studio (OmniVoice tự nhận tiếng Việt)
   dtype: "auto"                 # auto = fp16 (fp32 trên GTX 16xx). KHÔNG dùng bf16: giải mã âm thanh kém chính xác -> rè, sước
-  speed: 0.9                    # 0.9 = chậm hơn giọng mẫu 10%, thong thả hơn cho truyện dài
+  speed: 0.85                   # 0.85 = chậm hơn giọng mẫu 15%, thong thả (model dễ sinh tiếng lấy hơi -> có bộ lọc bên dưới)
   preprocess_prompt: true       # mặc định OmniVoice (như AI_Video_Studio): bỏ khoảng lặng thừa trong giọng mẫu
                                 # để model ước lượng đúng tốc độ nói -> không tự chèn ngắt quãng giữa câu
   position_temperature: 5.0     # mặc định OmniVoice
@@ -47,13 +47,15 @@ tts:
   fade_in_ms: 15
   fade_out_ms: 40
   room_tone_db: null            # null = khoảng nghỉ im lặng tuyệt đối (như AI_Video_Studio); -66 = thêm "không khí phòng" (nghe như tiếng xì nền)
+  suppress_breaths: true        # bỏ tiếng lấy hơi (hít vào) model tự sinh ở đầu/giữa câu
+  breath_reduce_db: -30         # mức giảm tiếng thở (-30 dB = gần như mất hẳn)
   pauses_ms:                    # nhịp nghỉ sau câu theo dấu câu
-    comma: 260
-    sentence: 480
-    question: 520
-    ellipsis: 650
-    paragraph: 800
-    dialogue: 850
+    comma: 240
+    sentence: 420
+    question: 460
+    ellipsis: 580
+    paragraph: 700
+    dialogue: 750
     title: 1200
 
 # --- Nghe lại bằng ASR để đọc lại câu vấp / nuốt chữ / lặp từ ---
