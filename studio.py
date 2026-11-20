@@ -129,7 +129,7 @@ def auto_batch_size(cfg: Dict[str, Any]) -> None:
 
         if torch.cuda.is_available():
             vram = torch.cuda.get_device_properties(0).total_memory / 1024 ** 3
-            size = 24 if vram >= 70 else 16 if vram >= 40 else 8 if vram >= 20 else 4
+            size = 24 if vram >= 70 else 16 if vram >= 40 else 8 if vram >= 19 else 4   # card "20 GB" báo ~19.6 GB
             jobs = max(1, int(os.environ.get("AUDIO_STUDIO_GPU_JOBS", "1")))
             size = max(2, size // jobs)   # nhiều job chung 1 GPU -> mỗi job batch nhỏ hơn
             log(f"GPU {torch.cuda.get_device_name(0)} {vram:.0f} GB, {jobs} job -> batch {size} câu/lượt", "Studio")
