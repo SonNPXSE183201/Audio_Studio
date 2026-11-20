@@ -289,3 +289,116 @@ class DriveSyncTests(unittest.TestCase):
 
         names = ["Chuong_0001-0010_Tap001.mp4", "Chuong_1491-1496_Tap150.mp4", "x.mp4", "Chuong_0011-0020_Tap002.mp4.part"]
         self.assertEqual({"Chuong_0001-0010_Tap001.mp4", "Chuong_1491-1496_Tap150.mp4"}, uploaded_episodes(names))
+
+
+class MultiJobTests(unittest.TestCase):
+    def _studio(self, tmp, job, extra_cfg=None):
+        import argparse
+
+        import studio
+
+        studio.DATA = studio.BASE = tmp
+        cfg = {"episode": {"chapters_per_episode": 10, "watch_seconds": 0}}
+        cfg.update(extra_cfg or {})
+        args = argparse.Namespace(range=None, force=False, finish=False, stop_on_error=False, job=job, watch=True)
+        return studio.Studio(cfg, args)
+
+    def _chapters(self, tmp, count):
+        os.makedirs(os.path.join(tmp, "input"), exist_ok=True)
+        for n in range(1, count + 1):
+            with open(os.path.join(tmp, "input", f"Chuong_{n:04d}.txt"), "w", encoding="utf-8") as f:
+                f.write(f"Chương {n}")
+
+    def test_lock_claim_and_stale(self):
+        import time as _time
+
+        from core import locks
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "ch0001.lock")
+            self.assertTrue(locks.claim(path, "A"))
+            self.assertFalse(locks.claim(path, "B"))
+            old = _time.time() - 4 * 3600
+            os.utime(path, (old, old))
+            self.assertTrue(locks.claim(path, "B", stale_sec=3 * 3600))   # khóa quá hạn -> giành lại
+
+    def test_two_jobs_split_chapters_without_overlap(self):
+        import threading as th
+        import time as _time
+
+        import studio
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._chapters(tmp, 12)
+            done = []
+            guard = th.Lock()
+
+            def make(job):
+                st = self._studio(tmp, job)
+                st.voice = lambda: {"ref_audio": None, "ref_text": None, "fp": "x"}
+
+                def fake_process(number, path, voice, glossary, names):
+                    _time.sleep(0.05)
+                    with guard:
+                        done.append((number, job))
+                    open(st.chapter_wav(number), "wb").close()
+
+                st.process_chapter = fake_process
+                return st
+
+            orig = studio.DATA
+            try:
+                jobs = [make("A"), make("B")]
+                threads = [th.Thread(target=j.run_audio, args=(False,)) for j in jobs]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+            finally:
+                studio.DATA = studio.BASE = orig
+            numbers = sorted(n for n, _ in done)
+            self.assertEqual(list(range(1, 13)), numbers)          # mỗi chương đúng 1 lần
+            self.assertEqual({"A", "B"}, {j for _, j in done})     # cả 2 job cùng làm
+
+    def test_video_watcher_builds_full_episodes_then_stops(self):
+        import studio
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._chapters(tmp, 15)
+            orig = studio.DATA
+            try:
+                st = self._studio(tmp, "video")
+                for n in range(1, 16):
+                    open(st.chapter_wav(n), "wb").close()
+                built = []
+
+                def fake_make(episode):
+                    built.append(episode)
+                    numbers, out = st.episode_info(episode)
+                    open(out + ".done", "a").close()
+
+                st._make_episode = fake_make
+                st.watch_video()   # không còn job audio nào -> ghép tập đủ chương rồi dừng
+            finally:
+                studio.DATA = studio.BASE = orig
+            self.assertEqual([1], built)   # tập 2 mới có 5/10 chương: chưa ghép (cần --finish)
+
+    def test_project_config_and_shared_files(self):
+        import studio
+
+        cfg = studio.fill_project({"sync": {"input": "gdrive:Dự án truyện/{project}/chuong",
+                                            "assets": {"Kenh": "gdrive:{project}/Kenh"}}}, "Giang_Than")
+        self.assertEqual("gdrive:Dự án truyện/Giang_Than/chuong", cfg["sync"]["input"])
+        self.assertEqual("gdrive:Giang_Than/Kenh", cfg["sync"]["assets"]["Kenh"])
+        with tempfile.TemporaryDirectory() as tmp:
+            orig_data, orig_base = studio.DATA, studio.BASE
+            try:
+                studio.BASE = tmp
+                studio.DATA = os.path.join(tmp, "projects", "A")
+                os.makedirs(studio.DATA)
+                open(os.path.join(tmp, "rclone.conf"), "w").close()
+                # File chung ở thư mục gốc được dùng khi bộ truyện không có bản riêng
+                self.assertEqual(os.path.join(tmp, "rclone.conf"), studio.rel("rclone.conf"))
+                self.assertEqual(os.path.join(studio.DATA, "input"), studio.rel("input"))
+            finally:
+                studio.DATA, studio.BASE = orig_data, orig_base

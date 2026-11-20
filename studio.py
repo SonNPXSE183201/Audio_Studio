@@ -3,8 +3,9 @@
 
   python studio.py run                 đọc audio + tự ghép tập khi đủ chương (chạy song song)
   python studio.py run --range 1-400   chỉ xử lý chương 1-400
-  python studio.py audio               chỉ đọc audio
-  python studio.py video [--finish]    chỉ ghép các tập đã đủ audio (--finish: gom cả tập lẻ cuối)
+  python studio.py audio --project X   chỉ đọc audio của bộ truyện X (chạy nhiều job cùng lúc được)
+  python studio.py video --watch       job ghép video chạy ngầm: đủ 10 chương là ghép + upload
+  python studio.py video [--finish]    ghép các tập đã đủ audio (--finish: gom cả tập lẻ cuối)
   python studio.py check               kiểm tra môi trường (ffmpeg, GPU, giọng mẫu, video nền)
   python studio.py bench --price 0.69  đo tốc độ thật của pod, quy ra thời gian và chi phí
 """
@@ -23,27 +24,63 @@ sys.path.insert(0, ROOT)
 # Thư mục dữ liệu (chương, giọng mẫu, video nền, output). Trên pod đặt ở volume /workspace
 # để Stop pod không mất; máy cá nhân mặc định là chính thư mục tool.
 DATA = os.path.abspath(os.environ.get("AUDIO_STUDIO_DATA", ROOT))
+# Thư mục gốc dữ liệu (dùng chung cho mọi bộ truyện: rclone.conf, giọng mẫu chung...).
+# Khi chạy --project X thì DATA = <BASE>/projects/X.
+BASE = DATA
 
-from core import drive  # noqa: E402
+from core import drive, locks  # noqa: E402
 from core.asr_checker import ASRChecker  # noqa: E402
 from core.audio_builder import AudioBuilder  # noqa: E402
 from core.text_processor import build_chunks, clean_paragraphs, extract_standardization_table  # noqa: E402
 from core.tts_engine import TTSEngine  # noqa: E402
 from core.utils import (  # noqa: E402
-    chapter_number, file_fingerprint, fingerprint, format_duration, load_config, log, read_json, set_log_file,
+    chapter_number, deep_merge, file_fingerprint, fingerprint, format_duration, load_config, log, read_json,
+    set_log_file,
 )
 from core.video_maker import VideoMaker  # noqa: E402
 
 
 def rel(path: str) -> str:
-    return path if os.path.isabs(path) else os.path.join(DATA, path)
+    """Đường dẫn trong thư mục bộ truyện; không có thì dùng bản chung ở thư mục gốc dữ liệu."""
+    if os.path.isabs(path):
+        return path
+    own = os.path.join(DATA, path)
+    if not os.path.exists(own) and DATA != BASE and os.path.exists(os.path.join(BASE, path)):
+        return os.path.join(BASE, path)
+    return own
+
+
+def fill_project(value: Any, project: str) -> Any:
+    """Thay {project} trong mọi chuỗi cấu hình bằng tên bộ truyện."""
+    if isinstance(value, str):
+        return value.replace("{project}", project)
+    if isinstance(value, dict):
+        return {fill_project(k, project): fill_project(v, project) for k, v in value.items()}
+    if isinstance(value, list):
+        return [fill_project(v, project) for v in value]
+    return value
+
+
+def load_studio_config(name: str, project: Optional[str]) -> Dict[str, Any]:
+    cfg = load_config(config_path(name))
+    if project:
+        own = os.path.join(DATA, "config.yaml")
+        if os.path.exists(own):
+            cfg = deep_merge(cfg, load_config(own))
+        cfg = fill_project(cfg, project)
+    else:
+        for section in ("sync", "upload"):
+            part = cfg.get(section, {})
+            if part.get("enabled") and "{project}" in json.dumps(part, ensure_ascii=False):
+                raise SystemExit(f"config.yaml mục '{section}' dùng {{project}}: hãy chạy với --project <tên bộ truyện>")
+    return cfg
 
 
 def config_path(name: str) -> str:
     """config.yaml trong thư mục dữ liệu (bản bạn đã sửa) được ưu tiên hơn bản mặc định của tool."""
     if os.path.isabs(name):
         return name
-    custom = os.path.join(DATA, name)
+    custom = os.path.join(BASE, name)
     return custom if os.path.exists(custom) else os.path.join(ROOT, name)
 
 
@@ -65,7 +102,9 @@ def auto_batch_size(cfg: Dict[str, Any]) -> None:
         if torch.cuda.is_available():
             vram = torch.cuda.get_device_properties(0).total_memory / 1024 ** 3
             size = 24 if vram >= 70 else 16 if vram >= 40 else 8 if vram >= 20 else 4
-            log(f"GPU {torch.cuda.get_device_name(0)} {vram:.0f} GB -> batch {size} câu/lượt", "Studio")
+            jobs = max(1, int(os.environ.get("AUDIO_STUDIO_GPU_JOBS", "1")))
+            size = max(2, size // jobs)   # nhiều job chung 1 GPU -> mỗi job batch nhỏ hơn
+            log(f"GPU {torch.cuda.get_device_name(0)} {vram:.0f} GB, {jobs} job -> batch {size} câu/lượt", "Studio")
         else:
             size = 1
     except ImportError:
@@ -91,6 +130,25 @@ class Studio:
         self._queued: set = set()
         self._lock = threading.Lock()
         self._last_sync = 0.0
+        self.job = getattr(args, "job", None) or f"job{os.getpid()}"
+        self.lock_dir = os.path.join(self.work_dir, "locks")
+        self.jobs_dir = os.path.join(self.work_dir, "jobs")
+
+    # ------------------------------------------------------------ jobs
+    def heartbeat(self) -> str:
+        path = os.path.join(self.jobs_dir, f"{self.job}.alive")
+        os.makedirs(self.jobs_dir, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"pid": os.getpid(), "host": locks.HOST, "time": time.time()}, handle)
+        return path
+
+    def audio_jobs_alive(self) -> List[str]:
+        """Các job đọc audio còn chạy (dựa vào file .alive và tiến trình còn sống)."""
+        alive = []
+        for path in glob.glob(os.path.join(self.jobs_dir, "*.alive")):
+            if not locks.is_stale(path, stale_sec=3 * 3600):
+                alive.append(os.path.basename(path)[:-6])
+        return alive
 
     # ------------------------------------------------------------ Google Drive
     def rclone_config(self) -> Optional[str]:
@@ -247,6 +305,14 @@ class Studio:
         ]
 
     def run_audio(self, with_video: bool) -> None:
+        alive = self.heartbeat()
+        try:
+            self._run_audio(with_video, alive)
+        finally:
+            if os.path.exists(alive):
+                os.remove(alive)
+
+    def _run_audio(self, with_video: bool, alive: str) -> None:
         self.sync_from_drive(force=True)
         chapters = self.chapter_files()
         if not chapters:
@@ -254,23 +320,33 @@ class Studio:
             return
         handled: set = set()
         pending = self.pending_chapters(handled)
-        log(f"{len(chapters)} chương, cần đọc {len(pending)}.", "Studio")
+        log(f"[{self.job}] {len(chapters)} chương, cần đọc {len(pending)} (chia với các job khác).", "Studio")
         if with_video:
             self.queue_ready_episodes()
         voice = glossary = names = None
         while pending:
-            if voice is None:
-                voice = self.voice()
-                glossary, names = self.load_extras()
             for number, path in pending:
                 handled.add(number)
+                lock = os.path.join(self.lock_dir, f"ch{number:04d}.lock")
+                # Chương đang được job khác đọc -> bỏ qua. Kiểm tra lại audio sau khi giành khóa
+                # vì job khác có thể vừa đọc xong.
+                if not locks.claim(lock, self.job):
+                    continue
                 try:
+                    if not self.args.force and os.path.exists(self.chapter_wav(number)):
+                        continue
+                    if voice is None:
+                        voice = self.voice()
+                        glossary, names = self.load_extras()
                     self.process_chapter(number, path, voice, glossary, names)
                 except Exception as exc:
                     log(f"Chương {number} lỗi: {exc}", "Lỗi")
                     if self.args.stop_on_error:
                         raise
                     continue
+                finally:
+                    locks.release(lock)
+                    locks.touch(alive)
                 if with_video:
                     self.queue_ready_episodes()
                 self.sync_from_drive()   # theo chu kỳ: lấy chương mới vừa thêm lên Drive
@@ -315,6 +391,17 @@ class Studio:
         return ready
 
     def make_episode(self, episode: int) -> None:
+        """Ghép + upload một tập; chỉ một job được làm một tập (khóa tapNNN.lock)."""
+        lock = os.path.join(self.lock_dir, f"tap{episode:03d}.lock")
+        if not locks.claim(lock, self.job):
+            return
+        try:
+            if not self.episode_done(episode):
+                self._make_episode(episode)
+        finally:
+            locks.release(lock)
+
+    def _make_episode(self, episode: int) -> None:
         numbers, _ = self.episode_info(episode)
         present = [n for n in numbers if os.path.exists(self.chapter_wav(n))]
         wavs = [self.chapter_wav(n) for n in present]
@@ -355,7 +442,72 @@ class Studio:
             except Exception as exc:
                 log(f"Tập {episode} lỗi: {exc}", "Lỗi")
 
+    def retry_uploads(self) -> None:
+        """Video tập đã ghép nhưng upload lỗi (mất mạng...) -> thử đẩy lại."""
+        ucfg = dict(self.cfg.get("upload", {}))
+        if not ucfg.get("enabled", False):
+            return
+        ucfg["config_path"] = self.rclone_config()
+        for out in sorted(glob.glob(os.path.join(self.video_dir, "Chuong_*_Tap*.mp4"))):
+            if os.path.exists(out + ".done"):
+                continue
+            match = drive.EPISODE_RE.match(os.path.basename(out))
+            if not match:
+                continue
+            lock = os.path.join(self.lock_dir, f"tap{int(match.group(3)):03d}.lock")
+            if not locks.claim(lock, self.job):
+                continue
+            try:
+                if drive.upload(out, ucfg, os.path.join(self.work_dir, "upload.log")):
+                    open(out + ".done", "a").close()
+                    if ucfg.get("delete_after_upload", True):
+                        os.remove(out)
+            finally:
+                locks.release(lock)
+
+    def watch_video(self) -> None:
+        """Job ghép video chạy ngầm: đủ chương là ghép + upload; dừng khi các job audio xong hết."""
+        poll = float(self.cfg.get("episode", {}).get("watch_seconds", 60))
+        log("Job video: theo dõi audio, đủ chương là ghép tập.", "Video")
+        idle_rounds = 0
+        failures: Dict[int, int] = {}
+        while True:
+            self.sync_from_drive()
+            self.retry_uploads()
+            ready = [e for e in self.ready_episodes(finish=False) if failures.get(e, 0) < 3]
+            progressed = False
+            for episode in ready:
+                try:
+                    self.make_episode(episode)
+                except Exception as exc:
+                    failures[episode] = failures.get(episode, 0) + 1
+                    log(f"Tập {episode} lỗi (lần {failures[episode]}/3): {exc}", "Lỗi")
+                progressed |= self.episode_done(episode)
+            if progressed:
+                idle_rounds = 0
+                continue   # vừa xong tập: xem ngay còn tập nào đủ chương không
+            if not self.audio_jobs_alive():
+                idle_rounds += 1
+                # Chờ thêm 1 vòng để chắc các job audio đã thật sự dừng (không phải đang khởi động).
+                if idle_rounds >= 2:
+                    if self.args.finish:
+                        for episode in self.ready_episodes(finish=True):
+                            self.make_episode(episode)
+                    missing = [e for e in {self.episode_of(n) for n, _ in self.chapter_files()}
+                               if not self.episode_done(e)]
+                    if missing:
+                        log(f"Job video dừng. Tập chưa đủ audio: {sorted(missing)[:10]} "
+                            "(tập lẻ cuối: chạy video --finish).", "Video")
+                    else:
+                        log("Job video dừng: mọi tập đã xong.", "Video")
+                    return
+            time.sleep(poll)
+
     def run(self, audio: bool, video: bool) -> None:
+        if not audio and getattr(self.args, "watch", False):
+            self.sync_from_drive(force=True)
+            self.watch_video()
+            return
         if not audio:
             self.sync_from_drive(force=True)
         worker = None
@@ -487,10 +639,20 @@ def main() -> int:
     parser.add_argument("--price", type=float, help="bench: giá pod $/giờ để tính chi phí")
     parser.add_argument("--sentences", type=int, default=48, help="bench: số câu đo (mặc định 48)")
     parser.add_argument("--chapter-minutes", type=float, default=8.0, help="bench: số phút audio 1 chương")
+    parser.add_argument("--project", help="tên bộ truyện: dữ liệu riêng ở projects/<tên>, {project} trong config")
+    parser.add_argument("--job", help="tên job (log, khóa), ví dụ A, B")
+    parser.add_argument("--watch", action="store_true", help="video: chạy ngầm, đủ chương là ghép tập")
     args = parser.parse_args()
-    cfg = load_config(config_path(args.config))
+    global DATA
+    if args.project:
+        DATA = os.path.join(BASE, "projects", args.project)
+        os.makedirs(DATA, exist_ok=True)
+    cfg = load_studio_config(args.config, args.project)
     studio = Studio(cfg, args)
-    set_log_file(os.path.join(studio.work_dir, "logs", time.strftime("studio_%Y%m%d.log")))
+    tag = f"_{args.job}" if args.job else ""
+    set_log_file(os.path.join(studio.work_dir, "logs", time.strftime(f"studio{tag}_%Y%m%d.log")))
+    if args.project:
+        log(f"Bộ truyện: {args.project} ({DATA})", "Studio")
     if args.command == "check":
         studio.check()
     elif args.command == "bench":

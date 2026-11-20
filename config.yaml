@@ -75,6 +75,7 @@ master:
 # --- Ghép tập ---
 episode:
   chapters_per_episode: 10
+  watch_seconds: 60             # job video: bao lâu quét audio một lần
   inserts:                      # file chèn: after = chèn TRƯỚC chương thứ (after+1); "end" = cuối tập
     - {after: 0, file: "Kenh/Script_Intro.mp3"}
     - {after: 4, file: "Kenh/Script_Watermark.mp3"}
@@ -92,19 +93,21 @@ video:
 
 # --- Google Drive qua rclone ---
 # Tự lấy chương + tài nguyên từ Drive mỗi lần chạy: pod mới không cần upload gì.
+# {project} được thay bằng tên bộ truyện khi chạy --project <tên> (trùng tên thư mục trên Drive),
+# nên MỘT file cấu hình dùng được cho mọi bộ truyện.
 sync:
   enabled: false
-  input: "gdrive:Dự án truyện/Ten_truyen/chuong"        # các file Chuong_XXXX.txt (+ glossary.json, names.txt)
-  assets:                                               # thư mục trên pod <- thư mục Drive (bỏ dòng không dùng)
-    assets/voice: "gdrive:Dự án truyện/Ten_truyen/voice"            # voice_reference_clean.wav + .txt
-    assets/background: "gdrive:Dự án truyện/Ten_truyen/background"  # background.mp4
-    Kenh: "gdrive:Dự án truyện/Ten_truyen/Kenh"                     # Script_Intro.mp3, Script_Watermark*.mp3
+  input: "gdrive:Dự án truyện/{project}/chuong"        # các file Chuong_XXXX.txt (+ glossary.json, names.txt)
+  assets:                                              # thư mục trên pod <- thư mục Drive (bỏ dòng không dùng)
+    assets/voice: "gdrive:Dự án truyện/{project}/voice"            # voice_reference_clean.wav + .txt
+    assets/background: "gdrive:Dự án truyện/{project}/background"  # background.mp4
+    Kenh: "gdrive:Dự án truyện/{project}/Kenh"                     # Script_Intro.mp3, Script_Watermark*.mp3
   refresh_minutes: 20           # trong lúc chạy, cứ 20 phút xem Drive có chương mới không
   skip_uploaded: true           # tập đã có trong upload.remote_dir -> bỏ qua, không đọc lại
 
 upload:
   enabled: false
-  remote_dir: "gdrive:Dự án truyện/Ten_truyen/video"
+  remote_dir: "gdrive:Dự án truyện/{project}/video"
   config_path: "rclone.conf"    # hoặc khai biến môi trường RCLONE_CONF_B64 trên RunPod (xem hướng dẫn)
   delete_after_upload: true     # xóa video trên pod sau khi đẩy thành công (để lại file .done)
   delete_audio_after_upload: true   # tập đã lên Drive thì xóa audio chương (ổ pod không đầy)

@@ -69,6 +69,22 @@ Kenh/
 
 Giọng mẫu càng sạch thì giọng đọc càng sạch: không tiếng vang, không nhạc, không tiếng ồn. Lời trong file `.txt` phải khớp từng chữ với giọng mẫu, nếu sai thì giọng đọc dễ vấp ở đầu câu.
 
+## Nhiều bộ truyện, nhiều job
+
+- **Mỗi bộ truyện một thư mục riêng**: chạy với `--project <tên>`. Dữ liệu nằm ở `projects/<tên>/` (chương, audio, video, cache), không bao giờ lẫn chương giữa các bộ.
+- **Một `config.yaml` cho mọi bộ**: đường dẫn Drive viết `gdrive:Dự án truyện/{project}/chuong`; tool thay `{project}` bằng tên bộ (đặt tên trùng thư mục trên Drive). Bộ nào cần khác (giọng, video nền…) thì thêm `projects/<tên>/config.yaml`, chỉ ghi những dòng muốn đổi.
+- **Nhiều job đọc audio cùng lúc tự chia chương**: job nào cũng lấy chương đầu tiên chưa có ai làm (khóa `work/locks/chXXXX.lock`), nên không bao giờ đọc trùng và không cần chia `--range`. Job chết giữa chừng thì job khác làm tiếp chương đó.
+- **Một job video chạy ngầm** (CPU): mỗi phút quét audio, đủ 10 chương liên tiếp là ghép tập + upload; mỗi tập chỉ một job được ghép (khóa `tapNNN.lock`). Tự dừng khi các job audio đã xong.
+
+```bash
+bash run.sh start --project Giang_Than --jobs 2     # 2 job audio + 1 job video
+bash run.sh status --project Giang_Than             # job đang chạy, số chương / audio / tập đã xong
+bash run.sh log --project Giang_Than
+bash run.sh stop --project Giang_Than
+
+bash pod/run_projects.sh --jobs 2 Giang_Than To_Vu  # nhiều bộ: chạy lần lượt từng bộ
+```
+
 ## Lệnh thường dùng
 
 ```bash

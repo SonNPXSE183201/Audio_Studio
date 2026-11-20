@@ -21,6 +21,16 @@ echo "[INFO] Cài đặt, log đầy đủ: ${LOG}"
 bash "${CODE_DIR}/pod/setup_pod.sh" 2>&1 | tee "${LOG}"
 
 # AUTO_RUN=1: cài xong tự chạy nền (lấy chương từ Drive -> đọc -> ghép tập -> upload).
+#   PROJECTS="Truyen_A Truyen_B"  các bộ truyện (tên thư mục trên Drive), chạy lần lượt từng bộ
+#   JOBS=2                         số job đọc audio mỗi bộ (dùng chung GPU)
 if [[ "${AUTO_RUN:-0}" == "1" ]]; then
-  bash "${CODE_DIR}/run.sh" start ${RUN_ARGS:-}
+  if [[ -n "${PROJECTS:-}" ]]; then
+    # Các bộ chạy NỐI TIẾP nhau trong nền (chung GPU, không tranh nhau).
+    # shellcheck disable=SC2086
+    nohup bash "${CODE_DIR}/pod/run_projects.sh" --jobs "${JOBS:-1}" ${RUN_ARGS:-} ${PROJECTS} \
+      >/workspace/audio_studio_projects.log 2>&1 </dev/null &
+    echo "[OK] Chạy lần lượt các bộ: ${PROJECTS}. Xem: bash ${CODE_DIR}/run.sh log --project <tên>"
+  else
+    bash "${CODE_DIR}/run.sh" start --jobs "${JOBS:-1}" ${RUN_ARGS:-}
+  fi
 fi

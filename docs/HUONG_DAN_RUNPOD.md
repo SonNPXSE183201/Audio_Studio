@@ -10,11 +10,14 @@ Chuẩn bị một lần (mục 5):
 1. Đưa chương `.txt`, giọng mẫu, video nền, intro/watermark lên các thư mục Drive.
 2. Khai 2 biến môi trường trong template RunPod: `RCLONE_CONF_B64` và `STUDIO_CONFIG_B64`.
 
-Mỗi lần tạo pod, mở Terminal và chạy:
+Mỗi lần tạo pod, mở Terminal và chạy (thay tên bộ truyện = tên thư mục trên Drive):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/SonNPXSE183201/Audio_Studio/main/pod/bootstrap.sh | AUTO_RUN=1 bash
+curl -fsSL https://raw.githubusercontent.com/SonNPXSE183201/Audio_Studio/main/pod/bootstrap.sh \
+  | AUTO_RUN=1 PROJECTS="Giang_Than" JOBS=2 bash
 ```
+
+Nhiều bộ truyện: `PROJECTS="Giang_Than To_Vu Bo_Thu_Ba"`: chạy lần lượt từng bộ, bộ này xong mới sang bộ sau.
 
 Tool tự cài đặt, tự tải chương và tài nguyên từ Drive, bỏ qua các tập đã có trên Drive, đọc audio, ghép tập, upload. Xem tiến độ: `bash /root/Audio_Studio/run.sh log`.
 
@@ -222,13 +225,25 @@ Hết truyện (tập cuối chưa đủ 10 chương):
 bash run.sh video --finish
 ```
 
-### Nhiều bộ truyện hoặc chia đôi chương
-
-Một tiến trình với batch đã dùng hết GPU, nên **không cần** chạy 2 tiến trình A/B như trước (2 tiến trình tranh GPU sẽ không nhanh hơn). Muốn chia việc cho 2 pod:
+### Nhiều bộ truyện, nhiều job
 
 ```bash
-bash run.sh start --range 1-400      # pod 1
-bash run.sh start --range 401-800    # pod 2 (volume riêng hoặc cùng volume)
+bash run.sh start --project Giang_Than --jobs 2   # 2 job audio tự chia chương + 1 job video chạy ngầm
+bash run.sh status --project Giang_Than
+bash run.sh log --project Giang_Than
+bash run.sh stop --project Giang_Than
+```
+
+- Mỗi bộ truyện có dữ liệu riêng ở `/workspace/audio_studio/projects/<tên>/`, lấy chương từ `gdrive:Dự án truyện/<tên>/chuong` (theo `{project}` trong `config.yaml`).
+- Các job audio **tự chia chương** bằng khóa: job nào rảnh thì lấy chương kế tiếp chưa ai làm, không đọc trùng, không cần `--range`.
+- Job video chạy bằng CPU, đủ 10 chương liên tiếp là ghép tập và upload, mỗi tập chỉ ghép một lần, tự dừng khi audio xong hết.
+- `--jobs 2` có nhanh hơn 1 job không thì tùy GPU: xem `nvidia-smi`, GPU-Util dưới ~70% thì mới đáng chạy 2 job (mục 2). Mỗi job tự giảm batch còn một nửa để vừa VRAM.
+
+**2 pod cho một bộ truyện:** khóa chương chỉ có tác dụng trong cùng một pod, nên 2 pod phải chia chương bằng `--range` theo bội số 10:
+
+```bash
+bash run.sh start --project Giang_Than --range 1-750      # pod 1
+bash run.sh start --project Giang_Than --range 751-1500   # pod 2
 ```
 
 ## 8. Xem tool đang làm gì
