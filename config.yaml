@@ -22,7 +22,7 @@ tts:
   # Cách sinh giọng giống hệt AI_Video_Studio (giọng mượt, không sước):
   language: null                # null như AI_Video_Studio (OmniVoice tự nhận tiếng Việt)
   dtype: "auto"                 # auto = fp16 (fp32 trên GTX 16xx). KHÔNG dùng bf16: giải mã âm thanh kém chính xác -> rè, sước
-  speed: 0.85                   # 0.85 = chậm hơn giọng mẫu 15%, thong thả (model dễ sinh tiếng lấy hơi -> có bộ lọc bên dưới)
+  speed: 0.8                    # 0.8 = chậm hơn giọng mẫu 20% (model dễ sinh tiếng lấy hơi -> có bộ lọc bên dưới)
   preprocess_prompt: true       # mặc định OmniVoice (như AI_Video_Studio): bỏ khoảng lặng thừa trong giọng mẫu
                                 # để model ước lượng đúng tốc độ nói -> không tự chèn ngắt quãng giữa câu
   position_temperature: 5.0     # mặc định OmniVoice
