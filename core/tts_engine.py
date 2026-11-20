@@ -208,33 +208,59 @@ class TTSEngine:
 
     # ------------------------------------------------------------ reference
     @staticmethod
-    def cut_at_pause(samples: np.ndarray, sr: int, max_seconds: float = 10.0,
-                     min_seconds: float = 4.0) -> Optional[np.ndarray]:
-        """Cắt giọng mẫu dài tại chỗ ngừng tự nhiên muộn nhất trong [min, max] giây (None nếu không cần/không có)."""
-        if samples.size <= sr * max_seconds:
-            return None
+    def find_pauses(samples: np.ndarray, sr: int, min_pause: float = 0.15) -> List[Tuple[float, float, float]]:
+        """Các chỗ ngừng: (giữa, độ dài giây, độ sạch dB so với đỉnh — càng âm càng sạch)."""
         frame = int(sr * 0.02)
         n = samples.size // frame
         energy = np.array([20 * np.log10(np.sqrt(np.mean(samples[i * frame:(i + 1) * frame] ** 2)) + 1e-9)
                            for i in range(n)])
-        quiet = energy < energy.max() - 35
-        best = None
-        start = None
+        peak = float(energy.max()) if n else 0.0
+        quiet = energy < peak - 35
+        pauses, start = [], None
         for i, q in enumerate(list(quiet) + [False]):
             if q and start is None:
                 start = i
             elif not q and start is not None:
-                if (i - start) * 0.02 >= 0.15:
-                    middle = (start + i) / 2 * 0.02          # cắt giữa khoảng lặng
-                    if min_seconds <= middle <= max_seconds:
-                        best = middle
+                length = (i - start) * 0.02
+                if length >= min_pause and start > 0 and i < n:          # bỏ lặng đầu/cuối file
+                    floor = float(np.median(energy[start:i])) - peak
+                    pauses.append(((start + i) / 2 * 0.02, length, floor))
                 start = None
+        return pauses
+
+    @staticmethod
+    def cut_at_pause(samples: np.ndarray, sr: int, max_seconds: float = 10.0,
+                     min_seconds: float = 4.0) -> Optional[np.ndarray]:
+        """Chọn ĐOẠN CÂU TRỌN VẸN đẹp nhất (≤ max_seconds) làm giọng mẫu (None nếu đã đủ ngắn/không tìm được).
+
+        Ranh giới tốt = chỗ ngừng dài (hết câu) và sạch. Đầu file bị coi là ranh giới yếu (audio
+        hay bị cắt giữa câu), cuối file là ranh giới tốt. Ưu tiên đoạn dài vừa phải, có ngắt hơi bên trong.
+        """
+        total = samples.size / sr
+        if total <= max_seconds:
+            return None
+        pauses = TTSEngine.find_pauses(samples, sr)
+        # Ranh giới: (thời điểm, độ mạnh). Mạnh = ngừng dài + sạch.
+        bounds = [(0.0, 0.15)] + [(t, length + max(0.0, (-floor - 40) / 100)) for t, length, floor in pauses]
+        bounds.append((total, 0.5))
+        best, best_score = None, -1e9
+        for i, (a, sa) in enumerate(bounds):
+            for b, sb in bounds[i + 1:]:
+                dur = b - a
+                if dur < min_seconds or dur > max_seconds:
+                    continue
+                inner = sum(1 for t, _, _ in pauses if a < t < b)      # có chỗ ngắt hơi bên trong = tự nhiên
+                score = 2.0 * sa + 2.0 * sb + 0.1 * min(inner, 3) + 0.05 * dur
+                if score > best_score:
+                    best, best_score = (a, b), score
         if best is None:
             return None
-        cut = samples[: int(best * sr)].copy()
+        a, b = best
+        cut = samples[int(a * sr): int(b * sr)].copy()
         fade = int(sr * 0.03)
+        cut[:fade] *= np.linspace(0.0, 1.0, fade)
         cut[-fade:] *= np.linspace(1.0, 0.0, fade)
-        return cut
+        return trim_silence(cut, sr, threshold_db=-45, lead_ms=60, tail_ms=150)
 
     @staticmethod
     def match_transcript(full_text: str, heard: str) -> Tuple[str, float]:
