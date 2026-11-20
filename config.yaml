@@ -96,7 +96,7 @@ video:
 # {project} được thay bằng tên bộ truyện khi chạy --project <tên> (trùng tên thư mục trên Drive),
 # nên MỘT file cấu hình dùng được cho mọi bộ truyện.
 sync:
-  enabled: false
+  enabled: auto                 # auto = tự bật khi pod có rclone.conf (RunPod Secret RCLONE_CONF_B64)
   input: "gdrive:Dự án truyện/{project}/chuong"        # các file Chuong_XXXX.txt (+ glossary.json, names.txt)
   assets:                                              # thư mục trên pod <- thư mục Drive (bỏ dòng không dùng)
     assets/voice: "gdrive:Dự án truyện/{project}/voice"            # voice_reference_clean.wav + .txt
@@ -106,7 +106,7 @@ sync:
   skip_uploaded: true           # tập đã có trong upload.remote_dir -> bỏ qua, không đọc lại
 
 upload:
-  enabled: false
+  enabled: auto                 # auto = tự bật khi pod có rclone.conf (RunPod Secret RCLONE_CONF_B64)
   remote_dir: "gdrive:Dự án truyện/{project}/video"
   config_path: "rclone.conf"    # hoặc khai biến môi trường RCLONE_CONF_B64 trên RunPod (xem hướng dẫn)
   delete_after_upload: true     # xóa video trên pod sau khi đẩy thành công (để lại file .done)

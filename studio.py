@@ -62,6 +62,27 @@ def fill_project(value: Any, project: str) -> Any:
     return value
 
 
+def find_rclone_conf(cfg: Dict[str, Any]) -> Optional[str]:
+    """rclone.conf: theo config -> thư mục dữ liệu chung -> mặc định của rclone (~/.config/rclone)."""
+    name = cfg.get("upload", {}).get("config_path") or "rclone.conf"
+    candidates = [rel(name), os.path.join(BASE, name),
+                  os.path.join(os.path.expanduser("~"), ".config", "rclone", "rclone.conf")]
+    for path in candidates:
+        if path and os.path.exists(path):
+            return path
+    return None
+
+
+def resolve_auto(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """sync/upload 'enabled: auto' -> bật khi tìm thấy rclone.conf (RunPod Secret hoặc file)."""
+    has_conf = find_rclone_conf(cfg) is not None
+    for section in ("sync", "upload"):
+        part = cfg.get(section)
+        if isinstance(part, dict) and str(part.get("enabled", "")).lower() == "auto":
+            part["enabled"] = has_conf
+    return cfg
+
+
 def load_studio_config(name: str, project: Optional[str]) -> Dict[str, Any]:
     cfg = load_config(config_path(name))
     if project:
@@ -69,7 +90,13 @@ def load_studio_config(name: str, project: Optional[str]) -> Dict[str, Any]:
         if os.path.exists(own):
             cfg = deep_merge(cfg, load_config(own))
         cfg = fill_project(cfg, project)
+        cfg = resolve_auto(cfg)
     else:
+        for section in ("sync", "upload"):   # auto + {project} mà không có --project -> tắt Drive
+            part = cfg.get(section, {})
+            if str(part.get("enabled", "")).lower() == "auto" and "{project}" in json.dumps(part, ensure_ascii=False):
+                part["enabled"] = False
+        cfg = resolve_auto(cfg)
         for section in ("sync", "upload"):
             part = cfg.get(section, {})
             if part.get("enabled") and "{project}" in json.dumps(part, ensure_ascii=False):
@@ -153,8 +180,7 @@ class Studio:
 
     # ------------------------------------------------------------ Google Drive
     def rclone_config(self) -> Optional[str]:
-        path = self.cfg.get("upload", {}).get("config_path") or "rclone.conf"
-        return rel(path)
+        return find_rclone_conf(self.cfg) or rel(self.cfg.get("upload", {}).get("config_path") or "rclone.conf")
 
     def sync_from_drive(self, force: bool = False) -> None:
         """Tải chương mới + tài nguyên từ Drive, đánh dấu các tập đã có trên Drive để bỏ qua."""
