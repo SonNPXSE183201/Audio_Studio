@@ -84,10 +84,18 @@ class AudioBuilder:
         self._ref_f0_path = ref_audio
         self.ref_f0 = None
         if ref_audio and os.path.exists(ref_audio):
-            samples, sr = read_wav(ref_audio)
-            self.ref_f0 = median_f0(samples, sr)
+            # Mức giọng chung đo lúc thử giọng (cao độ trung vị các câu model đọc ra). So với mức này
+            # thì "lệch giọng" = câu cao/thấp hơn các câu khác, không phạt cả giọng cao hơn mẫu đều đặn.
+            meta = read_json(os.path.splitext(ref_audio)[0] + ".json") or {}
+            if meta.get("pitch_target_hz"):
+                self.ref_f0 = float(meta["pitch_target_hz"])
+                source = "mức giọng chung khi thử giọng"
+            else:
+                samples, sr = read_wav(ref_audio)
+                self.ref_f0 = median_f0(samples, sr)
+                source = "giọng mẫu"
             if self.ref_f0:
-                log(f"Cao độ giọng mẫu: {self.ref_f0:.0f} Hz (câu lệch quá "
+                log(f"Cao độ chuẩn: {self.ref_f0:.0f} Hz ({source}; câu lệch quá "
                     f"{self.asr_cfg.get('max_pitch_dev_st', 1.5)} bán cung sẽ được đọc lại)", "TTS")
 
     # ------------------------------------------------------------ fingerprints

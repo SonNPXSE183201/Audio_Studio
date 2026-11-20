@@ -38,7 +38,7 @@ from core.text_processor import build_chunks, clean_paragraphs, extract_standard
 from core.tts_engine import TTSEngine  # noqa: E402
 from core.utils import (  # noqa: E402
     chapter_number, deep_merge, file_fingerprint, fingerprint, format_duration, load_config, log, read_json,
-    set_log_file,
+    set_log_file, write_json,
 )
 from core.video_maker import VideoMaker  # noqa: E402
 
@@ -361,6 +361,9 @@ class Studio:
         if len(options) > 1 and self.cfg.get("voice", {}).get("audition", True) and asr.enabled:
             best = self._audition(options, samples, sr) or best
         au.write_wav(short, best["cut"], sr, float32=True)
+        if best.get("pitch_target_hz"):
+            write_json(os.path.splitext(short)[0] + ".json", {"pitch_target_hz": best["pitch_target_hz"],
+                                                              "segment": [best["a"], best["b"]]})
         with open(short_txt, "w", encoding="utf-8") as handle:
             handle.write(best["text"])
         log(f"Giọng mẫu {total:.1f}s -> dùng đoạn {best['a']:.1f}-{best['b']:.1f}s ({best['cut'].size / sr:.1f}s): "
@@ -403,11 +406,15 @@ class Studio:
             cer = [char_error_rate(t, h) if h else 1.0 for (t, _, _), h in zip(outs, hyps)]
             st = [au.semitones(f, base_f0) for f in (au.median_f0(a, osr) for _, a, osr in outs) if f and base_f0]
             st_arr = np.array(st) if st else np.array([9.0])
-            score = 10 * float(np.mean(cer)) + abs(float(np.median(st_arr))) + float(np.std(st_arr))
+            # Đồng bộ giọng = câu này không cao/thấp hơn câu kia (dao động), quan trọng hơn nhiều so với
+            # cả giọng cao hơn mẫu đều đặn (lệch trung bình).
+            score = 10 * float(np.mean(cer)) + 2.0 * float(np.std(st_arr)) + 0.25 * abs(float(np.median(st_arr)))
             log(f"  đoạn {opt['a']:.1f}-{opt['b']:.1f}s: sai chữ {np.mean(cer):.1%}, cao độ {np.median(st_arr):+.2f} "
                 f"± {np.std(st_arr):.2f} bán cung -> điểm {score:.2f}", "Studio")
             if score < best_score:
                 best, best_score = opt, score
+                if st and base_f0:
+                    opt["pitch_target_hz"] = round(base_f0 * 2 ** (float(np.median(st_arr)) / 12.0), 1)
         return best
 
     def audio(self) -> AudioBuilder:
