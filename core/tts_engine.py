@@ -136,7 +136,7 @@ class TTSEngine:
     def _ref_text_punctuated(ref_text: Optional[str]) -> Optional[str]:
         if not ref_text:
             return None
-        text = " ".join(ref_text.split())
+        text = " ".join(ref_text.split()).rstrip(",;:- ")
         return text if text[-1:] in ".!?…" else text + "."
 
     def _generate(self, texts: List[str], voice: Dict[str, Any], seed: int) -> List[np.ndarray]:
