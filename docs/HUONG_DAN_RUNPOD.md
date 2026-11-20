@@ -4,23 +4,46 @@ Mục tiêu: đọc hàng trăm chương thành video với chi phí pod thấp 
 
 ## 0. Tóm tắt nhanh
 
+**Cách khuyên dùng: mọi thứ để trên Google Drive, pod mới chỉ cần 1 lệnh.**
+
+Chuẩn bị một lần (mục 5):
+1. Đưa chương `.txt`, giọng mẫu, video nền, intro/watermark lên các thư mục Drive.
+2. Khai 2 biến môi trường trong template RunPod: `RCLONE_CONF_B64` và `STUDIO_CONFIG_B64`.
+
+Mỗi lần tạo pod, mở Terminal và chạy:
+
 ```bash
-# 1. Pod mới hoặc vừa Start lại: một lệnh cài tất cả
-curl -fsSL https://raw.githubusercontent.com/SonNPXSE183201/Audio_Studio/main/pod/bootstrap.sh | bash
-
-# 2. Chép dữ liệu vào /workspace/audio_studio (chương, giọng mẫu, video nền, Kenh, rclone.conf)
-
-# 3. Kiểm tra rồi chạy nền
-cd /root/Audio_Studio
-bash run.sh check
-bash run.sh start
-bash run.sh log
+curl -fsSL https://raw.githubusercontent.com/SonNPXSE183201/Audio_Studio/main/pod/bootstrap.sh | AUTO_RUN=1 bash
 ```
+
+Tool tự cài đặt, tự tải chương và tài nguyên từ Drive, bỏ qua các tập đã có trên Drive, đọc audio, ghép tập, upload. Xem tiến độ: `bash /root/Audio_Studio/run.sh log`.
+
+Thêm chương mới lên Drive trong lúc pod đang chạy: tool tự lấy về sau tối đa 20 phút.
 
 ## 1. Tài khoản và volume
 
 - Tạo **Network Volume** khoảng **50 GB**, cùng vùng (datacenter) với GPU định thuê. Volume giữ model (~10 GB), chương, audio và video đang chờ upload. Code nằm ở ổ container và tự clone lại sau mỗi lần Start.
 - Tất cả dữ liệu nằm ở `/workspace/audio_studio`. Stop/Terminate pod không làm mất dữ liệu trên volume.
+
+### Chạy không cần Network Volume
+
+Nếu video được đẩy hết lên Drive thì có thể bỏ volume: chỉ cần **ổ container ~40 GB** (model ~6 GB, audio 10 chương, video tập đang chờ upload).
+- Mỗi lần tạo pod mới phải cài lại và tải lại model: **~10 phút**.
+- Stop/Terminate pod là mất những gì **chưa lên Drive** (tối đa ~10 chương đang làm dở): nên thuê **On-Demand**, không thuê Spot.
+- Pod mới tự biết tập nào đã xong nhờ xem thư mục video trên Drive (`sync.skip_uploaded: true`), không cần nhớ `--range`.
+- `upload.delete_audio_after_upload: true` (mặc định) giữ ổ container không đầy.
+
+**Chi phí bộ 1.500 chương (~200 giờ audio, 150 tập), không volume:**
+
+| GPU (giá/giờ) | 1 job | 2 job / 1 pod | 2 pod × 1 job |
+|---|---|---|---|
+| RTX A5000 ($0.16–0.27) | ~50 giờ, **$8–14** | ~42–46 giờ, **$7–12** | ~25 giờ, $8–14 |
+| RTX 5090 ($0.69–0.99) | ~18 giờ, $13–18 | ~15–17 giờ, $11–16 | **~9 giờ**, $13–18 |
+| RTX 4090 ($0.89) | ~22 giờ, $20 | ~19–20 giờ, $17 | ~11 giờ, $20 |
+| RTX PRO 4500 SE ($0.72) | ~31 giờ, $22 | ~26–28 giờ, $19 | ~15 giờ, $22 |
+| A40 ($0.59) | ~44 giờ, $26 | ~37–40 giờ, $23 | ~22 giờ, $26 |
+
+Cộng thêm ổ container (~$0.1–0.3 cả dự án) và ~10 phút mỗi lần tạo pod mới. Video 150 tập ≈ 300–650 GB trên Drive.
 
 ## 2. Chọn GPU: thời gian và chi phí theo cấu hình
 
@@ -97,7 +120,53 @@ Lệnh này:
 
 Log cài đặt nằm ở `/workspace/audio_studio_setup.log`.
 
-## 5. Chép dữ liệu lên pod
+## 5. Dữ liệu: tự lấy từ Google Drive (khuyên dùng)
+
+### 5.1. Sắp xếp thư mục trên Drive
+
+```
+Dự án truyện/Ten_truyen/
+├── chuong/        Chuong_0001.txt ... Chuong_1500.txt (+ glossary.json, names.txt nếu có)
+├── voice/         voice_reference_clean.wav + voice_reference_clean.txt
+├── background/    background.mp4
+├── Kenh/          Script_Intro.mp3, Script_Watermark.mp3, Script_Watermark1.mp3
+└── video/         tool upload video tập vào đây (tự tạo)
+```
+
+### 5.2. Sửa `config.yaml`
+
+```yaml
+sync:
+  enabled: true
+  input: "gdrive:Dự án truyện/Ten_truyen/chuong"
+  assets:
+    assets/voice: "gdrive:Dự án truyện/Ten_truyen/voice"
+    assets/background: "gdrive:Dự án truyện/Ten_truyen/background"
+    Kenh: "gdrive:Dự án truyện/Ten_truyen/Kenh"
+upload:
+  enabled: true
+  remote_dir: "gdrive:Dự án truyện/Ten_truyen/video"
+```
+
+### 5.3. Khai báo một lần trong RunPod (pod mới tự có, không phải chép file)
+
+Trên máy Windows, mở PowerShell và mã hóa 2 file thành chuỗi base64:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("$env:APPDATA\rclone\rclone.conf")) | Set-Clipboard   # dán vào RCLONE_CONF_B64
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("D:\duong_dan\config.yaml")) | Set-Clipboard          # dán vào STUDIO_CONFIG_B64
+```
+
+Trên RunPod: **Secrets** → tạo secret `rclone_conf` (dán chuỗi thứ nhất) và `studio_config` (dán chuỗi thứ hai). Khi Deploy pod (hoặc trong template), mục **Environment Variables**:
+
+| Key | Value |
+|---|---|
+| `RCLONE_CONF_B64` | `{{ RUNPOD_SECRET_rclone_conf }}` |
+| `STUDIO_CONFIG_B64` | `{{ RUNPOD_SECRET_studio_config }}` |
+
+Dùng Secret để token Google Drive không hiện ra trong cấu hình pod. Lưu template lại thì lần sau chỉ cần chọn template và Deploy. Đổi cấu hình thì cập nhật secret `studio_config`.
+
+### 5.4. Hoặc chép tay lên pod
 
 Cần có:
 

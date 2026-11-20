@@ -106,6 +106,30 @@ class AudioUtilsTests(unittest.TestCase):
         self.assertGreaterEqual(longest_internal_gap_ms(x, SR), 1400)
 
 
+class PitchTests(unittest.TestCase):
+    def test_f0_tracks_known_pitch(self):
+        from core.audio_utils import median_f0
+
+        for hz in (110.0, 180.0, 240.0):
+            t = np.arange(int(1.5 * SR)) / SR
+            x = (0.3 * np.sin(2 * np.pi * hz * t) + 0.1 * np.sin(4 * np.pi * hz * t)).astype(np.float32)
+            self.assertAlmostEqual(hz, median_f0(x, SR), delta=hz * 0.03)
+
+    def test_off_pitch_sentence_is_flagged(self):
+        builder = AudioBuilder(FakeTTS(), FakeASR(), {}, {"max_pitch_dev_st": 1.5}, tempfile.gettempdir())
+        builder.ref_f0 = 180.0
+        text = "Hắn đứng dậy đi ra ngoài cửa sổ nhìn trời."
+        t = np.arange(int(2 * SR)) / SR
+        on = (0.3 * np.sin(2 * np.pi * 182 * t)).astype(np.float32)
+        off = (0.3 * np.sin(2 * np.pi * 230 * t)).astype(np.float32)   # +4,2 bán cung
+        ok = builder._signal_check(text, on, on, SR)
+        bad = builder._signal_check(text, off, off, SR)
+        self.assertFalse(any("lệch giọng" in p for p in ok["problems"]))
+        self.assertTrue(any("lệch giọng" in p for p in bad["problems"]))
+        self.assertLess(builder._score(builder._asr_check(text, None, ok)),
+                        builder._score(builder._asr_check(text, None, bad)))
+
+
 class CheckTests(unittest.TestCase):
     def test_cer_ignores_names(self):
         ref = "Kế Duyên mở cửa bước ra ngoài"
@@ -214,3 +238,54 @@ class VideoTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DriveSyncTests(unittest.TestCase):
+    def test_pulls_chapters_and_skips_uploaded_episodes(self):
+        import argparse
+        import shutil as sh
+
+        import studio
+        from core import drive
+
+        with tempfile.TemporaryDirectory() as tmp:
+            remote_in = os.path.join(tmp, "remote_chuong")
+            os.makedirs(remote_in)
+            for n in range(1, 16):
+                with open(os.path.join(remote_in, f"Chuong_{n:04d}.txt"), "w", encoding="utf-8") as f:
+                    f.write(f"Chương {n}\n\nNội dung.")
+            calls = []
+
+            def fake_pull(remote, local, conf, includes=None):
+                calls.append(remote)
+                sh.copytree(remote, local, dirs_exist_ok=True)
+                return True
+
+            orig_pull, orig_list = drive.pull, drive.list_files
+            drive.pull = fake_pull
+            drive.list_files = lambda remote, conf: ["Chuong_0001-0010_Tap001.mp4", "ghi_chu.txt"]
+            orig_data = studio.DATA
+            studio.DATA = tmp
+            try:
+                cfg = {
+                    "sync": {"enabled": True, "input": remote_in},
+                    "upload": {"remote_dir": "gdrive:video"},
+                    "episode": {"chapters_per_episode": 10},
+                }
+                args = argparse.Namespace(range=None, force=False, finish=False)
+                st = studio.Studio(cfg, args)
+                st.sync_from_drive(force=True)
+                self.assertEqual(15, len(st.chapter_files()))
+                pending = [n for n, _ in st.pending_chapters(set())]
+                self.assertEqual(list(range(11, 16)), pending)   # tập 1 đã có trên Drive
+                st.sync_from_drive()   # chưa tới chu kỳ -> không tải lại
+                self.assertEqual(1, len(calls))
+            finally:
+                drive.pull, drive.list_files = orig_pull, orig_list
+                studio.DATA = orig_data
+
+    def test_uploaded_episode_names(self):
+        from core.drive import uploaded_episodes
+
+        names = ["Chuong_0001-0010_Tap001.mp4", "Chuong_1491-1496_Tap150.mp4", "x.mp4", "Chuong_0011-0020_Tap002.mp4.part"]
+        self.assertEqual({"Chuong_0001-0010_Tap001.mp4", "Chuong_1491-1496_Tap150.mp4"}, uploaded_episodes(names))

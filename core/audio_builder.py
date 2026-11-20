@@ -24,11 +24,13 @@ from core.audio_utils import (
     apply_fade,
     duration_ms,
     longest_internal_gap_ms,
+    median_f0,
     normalize_voiced,
     peak_limit,
     read_wav,
     resample,
     room_tone,
+    semitones,
     tail_level_db,
     trim_silence,
     write_wav,
@@ -42,7 +44,7 @@ POST_DEFAULTS: Dict[str, Any] = {
     "lead_ms": 80,            # giữ trước tiếng đầu tiên
     "tail_ms": 180,           # giữ sau tiếng cuối cùng
     "target_db": -20,         # độ to phần tiếng nói của mọi câu
-    "max_gain_db": 9,
+    "max_gain_db": 6,
     "fade_in_ms": 15,
     "fade_out_ms": 40,
     "room_tone_db": -66,      # null = khoảng nghỉ im lặng tuyệt đối
@@ -50,7 +52,7 @@ POST_DEFAULTS: Dict[str, Any] = {
 
 
 class AudioBuilder:
-    SYNTH_VERSION = 3   # đổi khi cách sinh/lưu câu thô thay đổi (sẽ đọc lại toàn bộ)
+    SYNTH_VERSION = 4   # đổi khi cách sinh/lưu câu thô thay đổi (sẽ đọc lại toàn bộ)
     POST_VERSION = 1    # đổi khi cách ghép thay đổi (chỉ ghép lại, không đọc lại)
 
     def __init__(
@@ -72,10 +74,26 @@ class AudioBuilder:
         self.force = False                  # True: bỏ qua cache câu, đọc lại toàn bộ
         self.ignore_terms: List[str] = []   # tên riêng không tính vào tỷ lệ sai của ASR
         self.post = {k: self.cfg.get(k, v) for k, v in POST_DEFAULTS.items()}
+        self.ref_f0: Optional[float] = None   # cao độ trung vị của giọng mẫu (Hz)
+        self._ref_f0_path: Optional[str] = None
+
+    def set_reference(self, ref_audio: Optional[str]) -> None:
+        """Đo cao độ giọng mẫu: câu đọc lệch giọng mẫu quá nhiều sẽ được đọc lại."""
+        if ref_audio == self._ref_f0_path:
+            return
+        self._ref_f0_path = ref_audio
+        self.ref_f0 = None
+        if ref_audio and os.path.exists(ref_audio):
+            samples, sr = read_wav(ref_audio)
+            self.ref_f0 = median_f0(samples, sr)
+            if self.ref_f0:
+                log(f"Cao độ giọng mẫu: {self.ref_f0:.0f} Hz (câu lệch quá "
+                    f"{self.asr_cfg.get('max_pitch_dev_st', 1.5)} bán cung sẽ được đọc lại)", "TTS")
 
     # ------------------------------------------------------------ fingerprints
     def _synth_fp(self, voice_fp: str) -> str:
-        keys = ("model_id", "num_step", "guidance_scale", "speed", "t_shift", "denoise", "seed", "dtype", "language")
+        keys = ("model_id", "num_step", "guidance_scale", "speed", "t_shift", "denoise", "seed", "dtype", "language",
+                "preprocess_prompt", "position_temperature", "class_temperature")
         return fingerprint(self.SYNTH_VERSION, voice_fp, {k: self.cfg.get(k) for k in keys})
 
     def _paths(self, synth_fp: str, text: str) -> Tuple[str, str]:
@@ -104,8 +122,17 @@ class AudioBuilder:
             problems.append(f"khoảng câm {gap}ms giữa câu")
         if tail_level_db(raw, sr) > float(self.asr_cfg.get("max_tail_db", -18)):
             problems.append("đuôi câu bị cụt")
+        pitch_dev = None
+        f0 = median_f0(samples, sr) if self.ref_f0 else None
+        if f0:
+            pitch_dev = round(semitones(f0, self.ref_f0), 2)
+            limit = float(self.asr_cfg.get("max_pitch_dev_st", 1.5))
+            if text.rstrip(" \"'”’»)").endswith(("?", "!")):
+                limit += 1.0   # câu hỏi/cảm thán vốn cao giọng hơn
+            if chars >= 12 and abs(pitch_dev) > limit:
+                problems.append(f"lệch giọng {pitch_dev:+.1f} bán cung")
         return {"duration_s": round(dur_s, 3), "cps": round(cps, 2), "max_gap_ms": gap,
-                "cer": None, "asr": None, "problems": problems}
+                "pitch_dev_st": pitch_dev, "cer": None, "asr": None, "problems": problems}
 
     def _asr_check(self, text: str, hyp: Optional[str], check: Dict[str, Any]) -> Dict[str, Any]:
         if hyp is not None:
@@ -120,8 +147,10 @@ class AudioBuilder:
 
     @staticmethod
     def _score(check: Dict[str, Any]) -> float:
+        """Thấp hơn = tốt hơn: đạt trước, rồi ít lỗi, ít sai chữ, gần cao độ giọng mẫu."""
         cer = check.get("cer")
-        return (0 if check.get("ok") else 10) + len(check.get("problems", [])) + (cer if cer is not None else 0.5)
+        pitch = abs(check.get("pitch_dev_st") or 0.0)
+        return (0 if check.get("ok") else 10) + len(check.get("problems", []))             + (cer if cer is not None else 0.5) + 0.3 * pitch
 
     def _batches(self, texts: Sequence[str]) -> List[List[int]]:
         """Chia chỉ số câu thành batch theo số câu và tổng ký tự (giới hạn VRAM)."""
@@ -146,6 +175,7 @@ class AudioBuilder:
         attempts = max(1, int(self.asr_cfg.get("max_attempts", 3)))
         base_seed = int(self.cfg.get("seed", 1234))
         sr = self.tts.sample_rate
+        self.set_reference(ref_audio)
         best: List[Optional[Tuple[np.ndarray, Dict[str, Any]]]] = [None] * len(texts)
         pending = list(range(len(texts)))
         for attempt in range(attempts):

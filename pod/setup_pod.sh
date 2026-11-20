@@ -36,6 +36,15 @@ PY
 log "4/5 - Thư mục dữ liệu trên volume: ${DATA_DIR}"
 mkdir -p "${DATA_DIR}"/{input,output/audio,output/video,work,assets/voice,assets/background,Kenh,.cache/huggingface}
 [[ -f "${DATA_DIR}/config.yaml" ]] || cp "${PROJECT_DIR}/config.yaml" "${DATA_DIR}/config.yaml"
+# Cấu hình lấy từ biến môi trường của RunPod (khai một lần trong template, pod mới tự có):
+#   RCLONE_CONF_B64   = nội dung rclone.conf mã hóa base64
+#   STUDIO_CONFIG_B64 = nội dung config.yaml mã hóa base64 (tùy chọn)
+if [[ -n "${RCLONE_CONF_B64:-}" ]]; then
+  echo "${RCLONE_CONF_B64}" | base64 -d > "${DATA_DIR}/rclone.conf" && echo "[OK] rclone.conf từ biến RCLONE_CONF_B64"
+fi
+if [[ -n "${STUDIO_CONFIG_B64:-}" ]]; then
+  echo "${STUDIO_CONFIG_B64}" | base64 -d > "${DATA_DIR}/config.yaml" && echo "[OK] config.yaml từ biến STUDIO_CONFIG_B64"
+fi
 # Giọng mẫu có sẵn trong code (nếu có) được chép sang volume lần đầu.
 for f in "${PROJECT_DIR}"/assets/voice/*; do
   [[ -e "$f" ]] || continue

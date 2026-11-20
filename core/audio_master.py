@@ -73,6 +73,9 @@ def master_wav(src: str, dst: str, cfg: Optional[Dict[str, Any]] = None) -> bool
     pre = []
     if cfg.get("highpass_hz", 70):
         pre.append(f"highpass=f={float(cfg.get('highpass_hz', 70))}:poles=2")
+    if cfg.get("compressor", True):
+        # Nén nhẹ 2:1 như sách nói: chỗ to vọt / nhỏ hụt trong câu được làm đều, không "bơm" tiếng.
+        pre.append("acompressor=threshold=-24dB:ratio=2:attack=15:release=250:knee=6:makeup=1")
     if cfg.get("deesser", False):
         pre.append("deesser=i=0.25")
     pre_filter = ",".join(pre) or "anull"

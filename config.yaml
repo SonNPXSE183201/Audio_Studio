@@ -18,8 +18,11 @@ voice:
 tts:
   model_id: "k2-fsa/OmniVoice"
   language: "vi"
-  dtype: "fp16"                 # fp16 | bf16 (thử bf16 nếu nghe lẹt xẹt; cần GPU Ampere trở lên) | fp32
-  speed: 1.0                    # giữ 1.0: < 1.0 làm giọng kéo giãn, ngắt nghỉ máy móc
+  dtype: "auto"                 # auto: bf16 trên GPU đời mới (A5000/3090/4090/A40...), fp32 trên GTX 16xx | fp16 | bf16 | fp32
+  speed: 1.0                    # tốc độ chuẩn = tốc độ của giọng mẫu. < 1.0 làm giọng kéo giãn, ngắt nghỉ máy móc
+  preprocess_prompt: false      # false: giữ nguyên khoảng ngừng tự nhiên của giọng mẫu (true = OmniVoice xóa
+                                # khoảng ngừng > 200 ms -> model học nhịp dồn dập, đọc vội và giật)
+  position_temperature: 5.0     # độ ngẫu nhiên khi sinh (mặc định OmniVoice 5.0); thấp hơn = các câu đều giọng hơn
   num_step: 32                  # 32 = chất lượng chuẩn; 24 nhanh hơn ~25% (nghe thử trước khi hạ)
   guidance_scale: 2.0
   seed: 1234
@@ -34,7 +37,7 @@ tts:
   lead_ms: 80
   tail_ms: 180
   target_db: -20                # cân bằng độ to mọi câu
-  max_gain_db: 9
+  max_gain_db: 6
   fade_in_ms: 15
   fade_out_ms: 40
   room_tone_db: -66             # khoảng nghỉ có "không khí phòng" rất nhỏ thay cho im lặng tuyệt đối
@@ -58,6 +61,7 @@ asr:
   cps_max: 28
   max_gap_ms: 1300              # khoảng câm giữa câu dài hơn = kẹt
   max_tail_db: -18              # đuôi câu còn to hơn mức này (so với đỉnh) = bị cắt cụt
+  max_pitch_dev_st: 1.5         # cao độ câu lệch giọng mẫu quá 1,5 bán cung -> đọc lại (giữ MỘT giọng xuyên suốt)
 
 # --- Hậu kỳ audio chương ---
 master:
@@ -65,6 +69,7 @@ master:
   lufs: -14                     # độ to chuẩn YouTube (-16 nhỏ hơn ~2 dB)
   true_peak_db: -1.0            # limiter chặn đỉnh -> to mà không vỡ tiếng
   highpass_hz: 70               # lọc tiếng ù
+  compressor: true              # nén nhẹ 2:1: chỗ to vọt / nhỏ hụt trong câu được làm đều
   deesser: false                # true nếu giọng mẫu nhiều tiếng xì (s, x)
 
 # --- Ghép tập ---
@@ -86,9 +91,20 @@ video:
   insert_gap_sec: 0.4
 
 # --- Google Drive qua rclone ---
+# Tự lấy chương + tài nguyên từ Drive mỗi lần chạy: pod mới không cần upload gì.
+sync:
+  enabled: false
+  input: "gdrive:Dự án truyện/Ten_truyen/chuong"        # các file Chuong_XXXX.txt (+ glossary.json, names.txt)
+  assets:                                               # thư mục trên pod <- thư mục Drive (bỏ dòng không dùng)
+    assets/voice: "gdrive:Dự án truyện/Ten_truyen/voice"            # voice_reference_clean.wav + .txt
+    assets/background: "gdrive:Dự án truyện/Ten_truyen/background"  # background.mp4
+    Kenh: "gdrive:Dự án truyện/Ten_truyen/Kenh"                     # Script_Intro.mp3, Script_Watermark*.mp3
+  refresh_minutes: 20           # trong lúc chạy, cứ 20 phút xem Drive có chương mới không
+  skip_uploaded: true           # tập đã có trong upload.remote_dir -> bỏ qua, không đọc lại
+
 upload:
   enabled: false
-  remote_dir: "gdrive:Dự án truyện/Ten_truyen"
-  config_path: "rclone.conf"
+  remote_dir: "gdrive:Dự án truyện/Ten_truyen/video"
+  config_path: "rclone.conf"    # hoặc khai biến môi trường RCLONE_CONF_B64 trên RunPod (xem hướng dẫn)
   delete_after_upload: true     # xóa video trên pod sau khi đẩy thành công (để lại file .done)
-  delete_audio_after_upload: false
+  delete_audio_after_upload: true   # tập đã lên Drive thì xóa audio chương (ổ pod không đầy)

@@ -245,6 +245,38 @@ def tail_level_db(samples: np.ndarray, sr: int, ms: int = 30) -> float:
     return float(20.0 * np.log10(np.sqrt(np.mean(tail ** 2) + 1e-12) / peak))
 
 
+def f0_contour(samples: np.ndarray, sr: int, fmin: float = 70.0, fmax: float = 450.0,
+               frame_ms: float = 40.0, hop_ms: float = 10.0) -> np.ndarray:
+    """Cao độ (Hz) các frame có tiếng nói, tự tương quan tính bằng FFT cho cả loạt frame."""
+    n, hop = int(sr * frame_ms / 1000), int(sr * hop_ms / 1000)
+    if samples.size < n * 2:
+        return np.zeros(0, dtype=np.float32)
+    count = 1 + (samples.size - n) // hop
+    idx = np.arange(n)[None, :] + hop * np.arange(count)[:, None]
+    frames = samples[idx].astype(np.float32)
+    energy = np.sqrt(np.mean(frames ** 2, axis=1))
+    frames = frames[energy > 0.05 * (energy.max() + 1e-9)]
+    if frames.shape[0] == 0:
+        return np.zeros(0, dtype=np.float32)
+    frames = (frames - frames.mean(axis=1, keepdims=True)) * np.hanning(n)[None, :]
+    spec = np.fft.rfft(frames, 2 * n, axis=1)
+    ac = np.fft.irfft(np.abs(spec) ** 2, axis=1)[:, :n]
+    ac = ac / (ac[:, :1] + 1e-12)
+    lo, hi = int(sr / fmax), min(n - 1, int(sr / fmin))
+    lags = lo + np.argmax(ac[:, lo:hi], axis=1)
+    strength = ac[np.arange(ac.shape[0]), lags]
+    return (sr / lags[strength > 0.5]).astype(np.float32)
+
+
+def median_f0(samples: np.ndarray, sr: int) -> Optional[float]:
+    f0 = f0_contour(samples, sr)
+    return float(np.median(f0)) if f0.size >= 10 else None
+
+
+def semitones(a: float, b: float) -> float:
+    return float(12.0 * np.log2(a / b))
+
+
 def clipping_ratio(samples: np.ndarray, threshold: float = 0.999) -> float:
     if samples.size == 0:
         return 0.0

@@ -37,7 +37,8 @@ def _install_torch_accelerator_polyfill(torch) -> None:
 
 
 class TTSEngine:
-    OPTIONAL_KWARGS = ("num_step", "guidance_scale", "speed", "t_shift", "denoise", "language")
+    OPTIONAL_KWARGS = ("num_step", "guidance_scale", "speed", "t_shift", "denoise", "language",
+                       "position_temperature", "class_temperature")
 
     def __init__(self, cfg: Dict[str, Any]):
         self.cfg = cfg
@@ -61,7 +62,12 @@ class TTSEngine:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         dtype = torch.float32
         if device == "cuda":
-            wanted = str(self.cfg.get("dtype", "fp16")).lower()
+            wanted = str(self.cfg.get("dtype", "auto")).lower()
+            name = torch.cuda.get_device_name(0)
+            if wanted == "auto":
+                # bf16 ổn định số học trên GPU đời mới (Ampere+: A5000, 3090, 4090, A40...);
+                # dòng GTX 16xx tính fp16 hay lỗi -> fp32.
+                wanted = "fp32" if "GTX 16" in name else ("bf16" if torch.cuda.is_bf16_supported() else "fp16")
             if wanted == "bf16" and torch.cuda.is_bf16_supported():
                 dtype = torch.bfloat16
             elif wanted in ("fp32", "float32"):
@@ -108,7 +114,14 @@ class TTSEngine:
             builder = getattr(self.model, "create_voice_clone_prompt", None)
             if builder is not None:
                 try:
-                    self._voice_prompt = builder(ref_audio=ref_audio, ref_text=ref_text or None)
+                    # preprocess_prompt=False: KHÔNG để OmniVoice xóa các khoảng ngừng > 200 ms trong
+                    # giọng mẫu (làm model học nhịp đọc dồn dập, không ngắt hơi -> đọc vội, giật).
+                    # Tool đã tự cắt lặng đầu/cuối và chuẩn hóa giọng mẫu ở prepare_reference.
+                    self._voice_prompt = builder(
+                        ref_audio=ref_audio,
+                        ref_text=self._ref_text_punctuated(ref_text),
+                        preprocess_prompt=bool(self.cfg.get("preprocess_prompt", False)),
+                    )
                     log("Đã mã hóa giọng mẫu (dùng lại cho mọi câu).", "TTS")
                 except Exception as exc:
                     log(f"Không tạo được voice prompt ({exc}); truyền giọng mẫu từng lần.", "TTS")
@@ -116,8 +129,15 @@ class TTSEngine:
             return {"voice_clone_prompt": self._voice_prompt}
         kwargs: Dict[str, Any] = {"ref_audio": ref_audio}
         if ref_text:
-            kwargs["ref_text"] = ref_text
+            kwargs["ref_text"] = self._ref_text_punctuated(ref_text)
         return kwargs
+
+    @staticmethod
+    def _ref_text_punctuated(ref_text: Optional[str]) -> Optional[str]:
+        if not ref_text:
+            return None
+        text = " ".join(ref_text.split())
+        return text if text[-1:] in ".!?…" else text + "."
 
     def _generate(self, texts: List[str], voice: Dict[str, Any], seed: int) -> List[np.ndarray]:
         import torch

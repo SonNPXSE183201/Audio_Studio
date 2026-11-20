@@ -90,6 +90,48 @@ class Studio:
         self._render_queue: "queue.Queue[Optional[int]]" = queue.Queue()
         self._queued: set = set()
         self._lock = threading.Lock()
+        self._last_sync = 0.0
+
+    # ------------------------------------------------------------ Google Drive
+    def rclone_config(self) -> Optional[str]:
+        path = self.cfg.get("upload", {}).get("config_path") or "rclone.conf"
+        return rel(path)
+
+    def sync_from_drive(self, force: bool = False) -> None:
+        """Tải chương mới + tài nguyên từ Drive, đánh dấu các tập đã có trên Drive để bỏ qua."""
+        scfg = self.cfg.get("sync", {})
+        if not scfg.get("enabled", False):
+            return
+        interval = float(scfg.get("refresh_minutes", 20)) * 60
+        if not force and time.time() - self._last_sync < interval:
+            return
+        self._last_sync = time.time()
+        conf = self.rclone_config()
+        if scfg.get("input"):
+            before = len(self.chapter_files())
+            if drive.pull(scfg["input"], self.input_dir, conf, ["*.txt", "*.json"]):
+                after = len(self.chapter_files())
+                extra = f" (+{after - before} mới)" if after > before else ""
+                log(f"Drive: {after} chương trong input{extra}", "Drive")
+        for local, remote in (scfg.get("assets") or {}).items():
+            if remote and drive.pull(remote, rel(local), conf):
+                log(f"Drive: đã đồng bộ {local}", "Drive")
+        remote_dir = self.cfg.get("upload", {}).get("remote_dir")
+        if scfg.get("skip_uploaded", True) and remote_dir:
+            names = drive.list_files(remote_dir, conf)
+            if names is not None:
+                marked = 0
+                for name in drive.uploaded_episodes(names):
+                    marker = os.path.join(self.video_dir, name + ".done")
+                    if not os.path.exists(marker):
+                        open(marker, "a").close()
+                        marked += 1
+                if marked:
+                    log(f"Drive: {marked} tập đã có trên Drive, bỏ qua các chương của chúng.", "Drive")
+
+    def episode_of(self, number: int) -> int:
+        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 10))
+        return (number - 1) // max(per, 1) + 1
 
     # ------------------------------------------------------------ chapters
     def chapter_files(self) -> List[Tuple[int, str]]:
@@ -195,29 +237,47 @@ class Studio:
             f"{format_duration(spent)} (x{timeline['total_duration_sec'] / max(spent, 1):.1f} thời gian thực)", "Studio")
         return timeline["total_duration_sec"]
 
+    def pending_chapters(self, handled: set) -> List[Tuple[int, str]]:
+        """Chương còn phải đọc: chưa có audio, chưa xử lý trong lần chạy này, tập chưa lên Drive."""
+        return [
+            (n, p) for n, p in self.chapter_files()
+            if n not in handled
+            and (self.args.force or not os.path.exists(self.chapter_wav(n)))
+            and not self.episode_done(self.episode_of(n))
+        ]
+
     def run_audio(self, with_video: bool) -> None:
+        self.sync_from_drive(force=True)
         chapters = self.chapter_files()
         if not chapters:
             log(f"Không có file .txt nào trong {self.input_dir}.", "Studio")
             return
-        pending = [(n, p) for n, p in chapters if self.args.force or not os.path.exists(self.chapter_wav(n))]
+        handled: set = set()
+        pending = self.pending_chapters(handled)
         log(f"{len(chapters)} chương, cần đọc {len(pending)}.", "Studio")
         if with_video:
             self.queue_ready_episodes()
-        if not pending:
-            return
-        voice = self.voice()
-        glossary, names = self.load_extras()
-        for number, path in pending:
-            try:
-                self.process_chapter(number, path, voice, glossary, names)
-            except Exception as exc:
-                log(f"Chương {number} lỗi: {exc}", "Lỗi")
-                if self.args.stop_on_error:
-                    raise
-                continue
-            if with_video:
-                self.queue_ready_episodes()
+        voice = glossary = names = None
+        while pending:
+            if voice is None:
+                voice = self.voice()
+                glossary, names = self.load_extras()
+            for number, path in pending:
+                handled.add(number)
+                try:
+                    self.process_chapter(number, path, voice, glossary, names)
+                except Exception as exc:
+                    log(f"Chương {number} lỗi: {exc}", "Lỗi")
+                    if self.args.stop_on_error:
+                        raise
+                    continue
+                if with_video:
+                    self.queue_ready_episodes()
+                self.sync_from_drive()   # theo chu kỳ: lấy chương mới vừa thêm lên Drive
+            self.sync_from_drive(force=True)
+            pending = self.pending_chapters(handled)
+            if pending:
+                log(f"Có thêm {len(pending)} chương mới từ Drive, đọc tiếp.", "Studio")
         builder = self._audio
         if builder:
             builder.tts.unload()
@@ -268,8 +328,7 @@ class Studio:
         log(f"XONG tập {episode}: {os.path.basename(out)} ({format_duration(total)}, ghép trong "
             f"{format_duration(time.time() - started)})", "Video")
         ucfg = dict(self.cfg.get("upload", {}))
-        if ucfg.get("config_path"):
-            ucfg["config_path"] = rel(ucfg["config_path"])
+        ucfg["config_path"] = self.rclone_config()
         if drive.upload(out, ucfg, os.path.join(self.work_dir, "upload.log")):
             open(out + ".done", "a").close()
             if ucfg.get("delete_after_upload", True):
@@ -297,6 +356,8 @@ class Studio:
                 log(f"Tập {episode} lỗi: {exc}", "Lỗi")
 
     def run(self, audio: bool, video: bool) -> None:
+        if not audio:
+            self.sync_from_drive(force=True)
         worker = None
         if video:
             # Ghép video dùng CPU nên chạy song song trong lúc GPU tiếp tục đọc audio.

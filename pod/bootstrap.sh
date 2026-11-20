@@ -19,3 +19,8 @@ fi
 mkdir -p "$(dirname "${LOG}")"
 echo "[INFO] Cài đặt, log đầy đủ: ${LOG}"
 bash "${CODE_DIR}/pod/setup_pod.sh" 2>&1 | tee "${LOG}"
+
+# AUTO_RUN=1: cài xong tự chạy nền (lấy chương từ Drive -> đọc -> ghép tập -> upload).
+if [[ "${AUTO_RUN:-0}" == "1" ]]; then
+  bash "${CODE_DIR}/run.sh" start ${RUN_ARGS:-}
+fi

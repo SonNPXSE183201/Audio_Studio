@@ -23,12 +23,14 @@ Chạy bằng terminal trên RunPod (hoặc máy có GPU NVIDIA). Đọc audio b
 | Chuẩn hóa để đọc | Số (`1.500` → một nghìn năm trăm), %, giờ, đơn vị, tiền tệ, `Lv`, `【】`, từ mượn (hack, game, VIP…) | cách đọc riêng trong `input/glossary.json` |
 | Chia câu | Mỗi đoạn đọc là **câu trọn vẹn** (≤ 220 ký tự); chỉ cắt ở dấu phẩy khi câu quá dài | nhịp nghỉ theo dấu câu, đoạn văn, lời thoại |
 | Đọc | OmniVoice clone giọng mẫu; **giọng mẫu mã hóa 1 lần**, **nhiều câu sinh cùng lúc** (batch theo VRAM) | — |
+| Một giọng xuyên suốt | Giọng mẫu giữ nguyên nhịp ngắt nghỉ tự nhiên; đo **cao độ từng câu so với giọng mẫu**, lệch quá 1,5 bán cung thì đọc lại và chọn bản gần giọng mẫu nhất | không còn câu cao câu thấp |
 | Nghe lại | Kiểm tra tốc độ đọc, khoảng câm giữa câu, đuôi câu cụt; **PhoWhisper nghe lại theo batch**: sai > 12% ký tự hoặc lặp từ thì đọc lại (seed khác, tối đa 3 lượt) | vẫn lỗi thì **tách đôi câu** đọc từng nửa; không bao giờ bỏ qua câu |
 | Nối câu | Cắt lặng nhẹ tay (giữ phụ âm đầu, đuôi thanh điệu), **cân bằng độ to từng câu**, fade mềm, khoảng nghỉ có "không khí phòng" thay vì im lặng tuyệt đối | không có tiếng click, câu không to nhỏ lệch nhau |
-| Hậu kỳ | Lọc ù 70 Hz, chuẩn **−14 LUFS** (chuẩn YouTube) bằng gain cố định + limiter chặn đỉnh −1 dBTP | không "phồng xẹp", không vỡ tiếng |
+| Hậu kỳ | Lọc ù 70 Hz, nén nhẹ 2:1, chuẩn **−14 LUFS** (chuẩn YouTube) bằng gain cố định + limiter chặn đỉnh −1 dBTP | không "phồng xẹp", không vỡ tiếng |
 | Ghép tập | Intro + chương 1–4 + watermark + 5–8 + watermark + 9–10, nối WAV không nén (chính xác từng mẫu) | không hụt tiếng ở chỗ nối |
 | Video | Video nền chuẩn hóa **1 lần** thành đơn vị lặp (crossfade cuối→đầu để lặp liền mạch), lặp bằng concat copy; audio nén **AAC 192k 48 kHz stereo đúng 1 lần** | độ dài hình = độ dài tiếng (sai < 0,15 s) |
-| Đóng gói | Đẩy lên Drive bằng rclone, thành công thì xóa video và để lại `.done` | lỗi mạng thì giữ file, lần sau thử lại |
+| Lấy dữ liệu | Tải chương `.txt` + giọng mẫu, video nền, intro từ Google Drive; 20 phút xem lại một lần để lấy chương mới | tập đã có trên Drive thì bỏ qua, pod mới tự chạy tiếp |
+| Đóng gói | Đẩy lên Drive bằng rclone, thành công thì xóa video và audio chương, để lại `.done` | lỗi mạng thì giữ file, lần sau thử lại |
 
 Mọi bước có cache: pod tắt giữa chừng thì lần sau chạy tiếp từ câu đang đọc dở (lưu sau mỗi 64 câu).
 
@@ -46,6 +48,10 @@ Mọi bước có cache: pod tắt giữa chừng thì lần sau chạy tiếp t
 | Mỗi câu mã hóa lại giọng mẫu, sinh từng câu một | chậm, tốn tiền pod | mã hóa 1 lần, sinh theo batch |
 
 ## Chuẩn bị dữ liệu
+
+**Cách khuyên dùng:** để chương và tài nguyên trên **Google Drive** rồi bật `sync.enabled: true`. Mỗi lần chạy, tool tự tải chương mới, giọng mẫu, video nền, intro về; tập nào đã có trên Drive thì bỏ qua. Pod mới chỉ cần 1 lệnh (xem [hướng dẫn RunPod, mục 5](docs/HUONG_DAN_RUNPOD.md#5-dữ-liệu-tự-lấy-từ-google-drive-khuyên-dùng)).
+
+Cấu trúc thư mục (trên Drive hoặc chép tay lên pod):
 
 ```
 input/
@@ -141,7 +147,9 @@ Audio_Studio/
 | Đọc chậm/nhanh | `tts.speed` (nên giữ 1.0) |
 | Một từ bị đọc sai | thêm vào `input/glossary.json`: `{"từ gốc": "cách đọc"}` |
 | ASR báo sai ở tên nhân vật | thêm tên vào `input/names.txt` |
-| Nghe lẹt xẹt | thử `tts.dtype: bf16` |
+| Giọng câu cao câu thấp | hạ `asr.max_pitch_dev_st` (vd. 1.0: khóa cao độ chặt hơn, đọc lại nhiều hơn) hoặc hạ `tts.position_temperature` |
+| Đọc vội, không ngắt hơi | giữ `tts.preprocess_prompt: false`; dùng giọng mẫu có ngắt nghỉ tự nhiên |
+| Nghe lẹt xẹt | `tts.dtype: auto` (bf16 trên GPU đời mới) hoặc `fp32` |
 | Video nền giật ở chỗ lặp | tăng `video.loop_crossfade_sec` |
 | Ép độ phân giải | `video.resolution: [1920, 1080]` |
 | Số chương mỗi tập, intro/watermark | `episode.chapters_per_episode`, `episode.inserts` |
