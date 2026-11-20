@@ -22,12 +22,24 @@ bash "${CODE_DIR}/pod/setup_pod.sh" 2>&1 | tee "${LOG}"
 
 # AUTO_RUN=1: cài xong tự chạy nền (lấy chương từ Drive -> đọc -> ghép tập -> upload).
 #   PROJECTS="Truyen_A Truyen_B"  các bộ truyện (tên thư mục trên Drive), chạy lần lượt từng bộ
+#   PROJECTS="Đại Niết Bàn;Truyen B"  tên có dấu cách -> ngăn cách các bộ bằng dấu ;
 #   JOBS=2                         số job đọc audio mỗi bộ (dùng chung GPU)
 if [[ "${AUTO_RUN:-0}" == "1" ]]; then
   if [[ -n "${PROJECTS:-}" ]]; then
     # Các bộ chạy NỐI TIẾP nhau trong nền (chung GPU, không tranh nhau).
+    # Tên bộ có dấu cách (vd "Đại Niết Bàn") -> ngăn cách các bộ bằng dấu ;
+    if [[ "${PROJECTS}" == *";"* ]]; then
+      IFS=';' read -r -a LIST <<<"${PROJECTS}"
+    else
+      read -r -a LIST <<<"${PROJECTS}"
+    fi
+    CLEAN=()
+    for p in "${LIST[@]}"; do
+      p="$(echo "$p" | sed 's/^ *//;s/ *$//')"
+      [[ -n "$p" ]] && CLEAN+=("$p")
+    done
     # shellcheck disable=SC2086
-    nohup bash "${CODE_DIR}/pod/run_projects.sh" --jobs "${JOBS:-1}" ${RUN_ARGS:-} ${PROJECTS} \
+    nohup bash "${CODE_DIR}/pod/run_projects.sh" --jobs "${JOBS:-1}" ${RUN_ARGS:-} "${CLEAN[@]}" \
       >/workspace/audio_studio_projects.log 2>&1 </dev/null &
     echo "[OK] Chạy lần lượt các bộ: ${PROJECTS}. Xem: bash ${CODE_DIR}/run.sh log --project <tên>"
   else
