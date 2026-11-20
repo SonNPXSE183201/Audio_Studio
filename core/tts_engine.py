@@ -208,6 +208,49 @@ class TTSEngine:
 
     # ------------------------------------------------------------ reference
     @staticmethod
+    def cut_at_pause(samples: np.ndarray, sr: int, max_seconds: float = 10.0,
+                     min_seconds: float = 4.0) -> Optional[np.ndarray]:
+        """Cắt giọng mẫu dài tại chỗ ngừng tự nhiên muộn nhất trong [min, max] giây (None nếu không cần/không có)."""
+        if samples.size <= sr * max_seconds:
+            return None
+        frame = int(sr * 0.02)
+        n = samples.size // frame
+        energy = np.array([20 * np.log10(np.sqrt(np.mean(samples[i * frame:(i + 1) * frame] ** 2)) + 1e-9)
+                           for i in range(n)])
+        quiet = energy < energy.max() - 35
+        best = None
+        start = None
+        for i, q in enumerate(list(quiet) + [False]):
+            if q and start is None:
+                start = i
+            elif not q and start is not None:
+                if (i - start) * 0.02 >= 0.15:
+                    middle = (start + i) / 2 * 0.02          # cắt giữa khoảng lặng
+                    if min_seconds <= middle <= max_seconds:
+                        best = middle
+                start = None
+        if best is None:
+            return None
+        cut = samples[: int(best * sr)].copy()
+        fade = int(sr * 0.03)
+        cut[-fade:] *= np.linspace(1.0, 0.0, fade)
+        return cut
+
+    @staticmethod
+    def match_transcript_prefix(full_text: str, heard: str) -> str:
+        """Phần đầu của lời mẫu (giữ chính tả, dấu câu) khớp nhất với điều ASR nghe được ở đoạn đã cắt."""
+        from core.asr_checker import char_error_rate
+
+        words = full_text.split()
+        best_text, best_err = full_text, 9.9
+        for k in range(1, len(words) + 1):
+            candidate = " ".join(words[:k])
+            err = char_error_rate(candidate, heard)
+            if err < best_err - 1e-9:
+                best_text, best_err = candidate, err
+        return best_text
+
+    @staticmethod
     def prepare_reference(src_audio: str, dst_wav: str, max_seconds: float = 20.0) -> str:
         """Đổi giọng mẫu (wav/mp3...) sang WAV mono 24 kHz, cắt lặng, chuẩn hóa âm lượng."""
         ffmpeg = shutil.which("ffmpeg")

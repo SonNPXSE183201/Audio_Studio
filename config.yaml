@@ -10,9 +10,11 @@ paths:
 
 # --- Giọng clone ---
 voice:
-  ref_audio: "assets/voice/voice_reference_clean.wav"   # wav hoặc mp3; nên 6-20 giây, sạch, không nhạc nền
+  ref_audio: "assets/voice/voice_reference_clean.wav"   # wav hoặc mp3; sạch, không nhạc nền
   ref_text: "assets/voice/voice_reference_clean.txt"    # lời đọc KHỚP CHÍNH XÁC với file giọng mẫu
   fallbacks: ["input/clone_voice_clean.wav", "input/clone_voice_clean.mp3"]
+  max_seconds: 10               # giọng mẫu dài hơn -> tự cắt ở chỗ ngừng tự nhiên (OmniVoice khuyên 3-10s).
+                                # Mẫu dài làm đọc nối/thừa/mất chữ đầu câu và chậm 2-3 lần. 0 = không cắt
 
 # --- OmniVoice ---
 tts:

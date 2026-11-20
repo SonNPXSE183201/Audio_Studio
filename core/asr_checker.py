@@ -126,10 +126,12 @@ class ASRChecker:
         if not items or not self.load():
             return [None] * len(items)
         self._free_vram()
-        inputs = [{"raw": resample(s, sr, 16000), "sampling_rate": 16000} for s, sr in items]
+        audios = [resample(s, sr, 16000) for s, sr in items]
         size = max(1, int(self.cfg.get("batch_size", batch_size)))
         while size > 1:
             try:
+                # Tạo dict mới mỗi lần: pipeline xóa khóa "raw" khỏi dict đã dùng -> thử lại sẽ lỗi.
+                inputs = [{"raw": a, "sampling_rate": 16000} for a in audios]
                 results = self.pipe(inputs, batch_size=size)
                 return [str(r.get("text", "")).strip() for r in results]
             except Exception as exc:

@@ -288,6 +288,7 @@ class Studio:
         prepared = os.path.join(self.work_dir, "voice", f"ref_{fingerprint(file_fingerprint(ref))}.wav")
         if not os.path.exists(prepared):
             TTSEngine.prepare_reference(ref, prepared)
+        prepared, ref_text = self._short_reference(prepared, ref_text, float(vcfg.get("max_seconds", 10)))
         if not ref_text:
             log("Thiếu file .txt của giọng mẫu: dùng ASR nghe ra lời mẫu (nên tự viết để chính xác).", "Cảnh báo")
             from core.audio_utils import read_wav
@@ -300,6 +301,37 @@ class Studio:
                 log(f"Lời mẫu: {ref_text}", "Studio")
         log(f"Giọng mẫu: {os.path.basename(ref)}", "Studio")
         return {"ref_audio": prepared, "ref_text": ref_text or None, "fp": fingerprint(file_fingerprint(ref), ref_text)}
+
+    def _short_reference(self, prepared: str, ref_text: str, max_seconds: float) -> Tuple[str, str]:
+        """Giọng mẫu dài (> max_seconds) -> cắt ở chỗ ngừng tự nhiên + lấy đúng phần lời tương ứng.
+
+        Giọng mẫu dài (vd 18s) làm OmniVoice đọc nối sang câu mới (thừa/mất chữ đầu câu) và chậm 2-3 lần.
+        """
+        from core.audio_utils import read_wav, write_wav
+
+        if max_seconds <= 0:
+            return prepared, ref_text
+        short = prepared.replace(".wav", f"_max{int(max_seconds)}.wav")
+        short_txt = short.replace(".wav", ".txt")
+        if os.path.exists(short) and os.path.exists(short_txt):
+            with open(short_txt, "r", encoding="utf-8") as handle:
+                return short, handle.read().strip()
+        samples, sr = read_wav(prepared)
+        cut = TTSEngine.cut_at_pause(samples, sr, max_seconds)
+        if cut is None:
+            if samples.size > sr * max_seconds:
+                log(f"Giọng mẫu dài {samples.size / sr:.1f}s nhưng không tìm được chỗ ngừng để cắt.", "Cảnh báo")
+            return prepared, ref_text
+        heard = self.audio().asr.transcribe(cut, sr) if self.audio().asr.enabled else None
+        if not heard:
+            log("Không nghe lại được đoạn giọng mẫu đã cắt: giữ nguyên giọng mẫu dài.", "Cảnh báo")
+            return prepared, ref_text
+        text = TTSEngine.match_transcript_prefix(ref_text, heard) if ref_text else heard
+        write_wav(short, cut, sr, float32=True)
+        with open(short_txt, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        log(f"Giọng mẫu {samples.size / sr:.1f}s -> cắt còn {cut.size / sr:.1f}s: «{text}»", "Studio")
+        return short, text
 
     def audio(self) -> AudioBuilder:
         if self._audio is None:

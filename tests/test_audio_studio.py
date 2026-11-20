@@ -447,3 +447,26 @@ class ProjectNameTests(unittest.TestCase):
             self.assertTrue(s.input_dir.startswith(studio.DATA))
             self.assertTrue(s.audio_dir.startswith(studio.DATA))
             self.assertTrue(studio.own("assets/voice").startswith(studio.DATA))
+
+
+class ReferenceCutTests(unittest.TestCase):
+    def test_cut_long_reference_at_pause(self):
+        from core.tts_engine import TTSEngine
+
+        sr = 24000
+        t = np.arange(int(sr * 3.0)) / sr
+        voiced = (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+        gap = np.zeros(int(sr * 0.4), dtype=np.float32)
+        x = np.concatenate([voiced, gap, voiced, gap, voiced, gap, voiced, gap, voiced])   # ~16.6s, ngừng ở 3.2/6.6/10/13.4s
+        cut = TTSEngine.cut_at_pause(x, sr, max_seconds=10.0)
+        self.assertIsNotNone(cut)
+        self.assertTrue(6.0 < cut.size / sr <= 10.0)
+        self.assertIsNone(TTSEngine.cut_at_pause(x[: sr * 8], sr, max_seconds=10.0))   # ngắn sẵn: không cắt
+
+    def test_match_transcript_prefix(self):
+        from core.tts_engine import TTSEngine
+
+        full = "Ba ngày trước, Kế Duyên còn đang làm trâu làm ngựa ở Lam Tinh, tan làm còn cùng bạn bè ăn lẩu hát hò. Vậy mà chỉ sau một giấc ngủ."
+        heard = "ba ngày trước kế duyên còn đang làm trâu làm ngựa ở lam tinh tan làm còn cùng bạn bè ăn lẩu hát hò"
+        self.assertEqual("Ba ngày trước, Kế Duyên còn đang làm trâu làm ngựa ở Lam Tinh, tan làm còn cùng bạn bè ăn lẩu hát hò.",
+                         TTSEngine.match_transcript_prefix(full, heard))
