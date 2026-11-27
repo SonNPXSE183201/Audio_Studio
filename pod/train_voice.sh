@@ -51,7 +51,9 @@ cd "${VIENEU_DIR}"
 log "2/5 - Mã hóa dataset ($(wc -l < "${DATASET}/metadata.csv") clip)"
 "${PY}" finetune/prepare_dataset.py --dataset-dir "${DATASET}"
 
-MODELS=(--model "goc=clone:${REF}")
+# Clip đóng gói giọng / clone đối chứng (3-8 s, sạch); mặc định là chính giọng mẫu.
+CLIP="${VOICE_CLIP:-${REF}}"
+MODELS=(--model "goc=clone:${CLIP}")
 for E in "${EPOCHS[@]}"; do
   RUN="${SLUG}_e${E}"
   log "3/5 - Train LoRA ${E} epoch -> ${RUN}"
@@ -60,7 +62,7 @@ for E in "${EPOCHS[@]}"; do
       --output-dir "${WORK}/output" --epochs "${E}" --eval-ratio 0.05 --eval-every 10 \
       --save-every 100000 --merge 2>&1 | tee "${WORK}/${RUN}.log"
   log "4/5 - Đóng gói giọng '${VOICE}' vào ${RUN}/merged"
-  "${PY}" finetune/make_voice.py --audio "${REF}" --name "${VOICE}" --default \
+  "${PY}" finetune/make_voice.py --audio "${CLIP}" --name "${VOICE}" --default \
       --out "${WORK}/output/${RUN}/merged"
   MODELS+=(--model "e${E}=${WORK}/output/${RUN}/merged:${VOICE}")
 done

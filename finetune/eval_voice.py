@@ -37,6 +37,24 @@ def parse_model(spec: str):
     return {"label": label, "backbone_repo": repo, "voice": voice}
 
 
+def pick_best(results):
+    """Model nên dùng: giống giọng nhất trong các model KHÔNG kém bản đầu tiên (clone tức thì) về
+    độ rõ chữ (CER tăng <= 1 điểm %) và độ sạch giọng (SIG thấp nhất giảm <= 0,1). Không có thì None."""
+    if not results:
+        return None
+    base = results[0]
+    ok = []
+    for r in results[1:]:
+        if r["cer"] > base["cer"] + 0.01:
+            continue
+        if r.get("sig_thap_nhat") is not None and base.get("sig_thap_nhat") is not None \
+                and r["sig_thap_nhat"] < base["sig_thap_nhat"] - 0.1:
+            continue
+        if r["giong_mau"] > base["giong_mau"]:
+            ok.append(r)
+    return max(ok, key=lambda r: r["giong_mau"])["label"] if ok else None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ref", required=True, help="file giọng thật (làm mốc độ giống giọng)")
@@ -101,9 +119,12 @@ def main() -> int:
     asr.unload()
 
     ref_q = dnsmos(ref, ref_sr)
+    best = pick_best(results)
     with open(os.path.join(args.out, "ket_qua.json"), "w", encoding="utf-8") as handle:
-        json.dump({"cau": chunks, "ket_qua": results, "dnsmos_giong_mau": ref_q}, handle,
+        json.dump({"cau": chunks, "ket_qua": results, "dnsmos_giong_mau": ref_q, "goi_y": best}, handle,
                   ensure_ascii=False, indent=1)
+    with open(os.path.join(args.out, "goi_y.txt"), "w", encoding="utf-8") as handle:
+        handle.write((best or "") + "\n")
     print(f"\n{'model':<14}{'giống giọng':>12}{'thấp nhất':>11}{'đồng đều':>10}{'CER':>8}"
           f"{'SIG':>7}{'SIG min':>9}{'OVRL':>7}")
     for r in results:
