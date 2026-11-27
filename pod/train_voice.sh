@@ -47,22 +47,36 @@ if [[ "${DATASET}" == gdrive:* ]]; then
 fi
 [[ -f "${DATASET}/metadata.csv" ]] || { echo "Không thấy ${DATASET}/metadata.csv"; exit 1; }
 
-cd "${VIENEU_DIR}"
-log "2/5 - Mã hóa dataset ($(wc -l < "${DATASET}/metadata.csv") clip)"
-"${PY}" finetune/prepare_dataset.py --dataset-dir "${DATASET}"
-
+# Script fine-tune của VieNeu chỉ đọc/ghi BÊN TRONG thư mục đang đứng (safe_path): chạy từ ${WORK}
+# và đưa mọi file vào trong đó.
+inside() { [[ "$(realpath "$1")" == "$(realpath "${WORK}")"/* ]]; }
+if ! inside "${DATASET}"; then
+  log "Chép dataset vào ${WORK}/dataset"
+  mkdir -p "${WORK}/dataset" && cp -r "${DATASET}"/. "${WORK}/dataset/"
+  DATASET="${WORK}/dataset"
+fi
 # Clip đóng gói giọng / clone đối chứng (3-8 s, sạch); mặc định là chính giọng mẫu.
 CLIP="${VOICE_CLIP:-${REF}}"
+if ! inside "${CLIP}"; then
+  cp "${CLIP}" "${WORK}/clip_dong_goi_giong.wav"
+  CLIP="${WORK}/clip_dong_goi_giong.wav"
+fi
+DATASET="$(realpath "${DATASET}")"; CLIP="$(realpath "${CLIP}")"
+
+cd "${WORK}"
+log "2/5 - Mã hóa dataset ($(wc -l < "${DATASET}/metadata.csv") clip)"
+"${PY}" "${VIENEU_DIR}/finetune/prepare_dataset.py" --dataset-dir "${DATASET}"
+
 MODELS=(--model "goc=clone:${CLIP}")
 for E in "${EPOCHS[@]}"; do
   RUN="${SLUG}_e${E}"
   log "3/5 - Train LoRA ${E} epoch -> ${RUN}"
   # Dataset nhỏ (~200-300 clip): eval mỗi 10 bước để thấy lúc eval loss ngừng giảm (overfit).
-  "${PY}" finetune/train_lora.py --data "${DATASET}/train.parquet" --run "${RUN}" \
+  "${PY}" "${VIENEU_DIR}/finetune/train_lora.py" --data "${DATASET}/train.parquet" --run "${RUN}" \
       --output-dir "${WORK}/output" --epochs "${E}" --eval-ratio 0.05 --eval-every 10 \
       --save-every 100000 --merge 2>&1 | tee "${WORK}/${RUN}.log"
   log "4/5 - Đóng gói giọng '${VOICE}' vào ${RUN}/merged"
-  "${PY}" finetune/make_voice.py --audio "${CLIP}" --name "${VOICE}" --default \
+  "${PY}" "${VIENEU_DIR}/finetune/make_voice.py" --audio "${CLIP}" --name "${VOICE}" --default \
       --out "${WORK}/output/${RUN}/merged"
   MODELS+=(--model "e${E}=${WORK}/output/${RUN}/merged:${VOICE}")
 done
