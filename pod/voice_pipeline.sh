@@ -16,7 +16,11 @@ DATA_DIR="${AUDIO_STUDIO_DATA:-/workspace/audio_studio}"
 PY="${AUDIO_STUDIO_PYTHON:-python3}"
 WORK="${DATA_DIR}/voice_lora"
 RC=(--config "${DATA_DIR}/rclone.conf" --drive-root-folder-id "${FOLDER_ID}")
+# Đích PHẢI có tiền tố remote: thiếu "gdrive:" thì rclone chép vào thư mục CỤC BỘ trên pod, rclone check
+# so cục bộ cũng "khớp" -> tưởng đã lên Drive rồi Stop pod -> mất hết (đã xảy ra 28/11/2026).
+DST="${DRIVE_REMOTE:-gdrive}:"
 say() { echo "[$(date +%H:%M:%S)][PIPELINE] $*"; }
+rclone lsf "${RC[@]}" "${DST}" --max-depth 1 >/dev/null || { say "Không truy cập được thư mục Drive ${FOLDER_ID}"; exit 1; }
 
 say "Đợi dataset ${DATASET}/metadata.csv..."
 until [[ -s "${DATASET}/metadata.csv" ]]; do sleep 30; done
@@ -40,23 +44,26 @@ say "Model gợi ý: ${BEST:-không model fine-tune nào hơn clone tức thì}"
 say "Đẩy kết quả lên Drive (thư mục ${FOLDER_ID})..."
 cp "${CLIP}" "${WORK}/eval/clip_dong_goi_giong.wav"
 cp "${WORK}"/*.log "${WORK}/eval/" 2>/dev/null || true
-rclone copy "${RC[@]}" "${WORK}/eval" "eval"
-rclone copy "${RC[@]}" "${DATASET}" "dataset" --exclude "train.parquet"
+rclone copy "${RC[@]}" "${WORK}/eval" "${DST}eval"
+rclone copy "${RC[@]}" "${DATASET}" "${DST}dataset" --exclude "train.parquet" --exclude "_clips/**"
 for run in "${WORK}"/output/*/; do
   name="$(basename "${run}")"
-  rclone copy "${RC[@]}" "${run}adapter" "models/${name}/adapter"
-  rclone copy "${RC[@]}" "${run}merged" "models/${name}/merged"
+  rclone copy "${RC[@]}" "${run}adapter" "${DST}models/${name}/adapter"
+  rclone copy "${RC[@]}" "${run}merged" "${DST}models/${name}/merged"
 done
 
 say "Kiểm tra Drive đủ file..."
 ok=1
-rclone check "${RC[@]}" "${WORK}/eval" "eval" --one-way || ok=0
+rclone check "${RC[@]}" "${WORK}/eval" "${DST}eval" --one-way || ok=0
 for run in "${WORK}"/output/*/; do
   name="$(basename "${run}")"
-  rclone check "${RC[@]}" "${run}merged" "models/${name}/merged" --one-way || ok=0
+  rclone check "${RC[@]}" "${run}merged" "${DST}models/${name}/merged" --one-way || ok=0
 done
+# Xác nhận bằng một lần liệt kê THẬT trên Drive (không tin riêng mã thoát của copy/check).
+remote_n="$(rclone lsf "${RC[@]}" "${DST}models" -R --files-only 2>/dev/null | wc -l)"
+[[ "${remote_n}" -gt 0 ]] || ok=0
 if [[ "${ok}" != 1 ]]; then
-  say "Drive CHƯA đủ file -> KHÔNG tắt pod (tránh mất model). Chạy lại phần rclone copy."
+  say "Drive CHƯA đủ file (${remote_n} file trong models/) -> KHÔNG tắt pod (tránh mất model). Chạy lại phần rclone copy."
   exit 1
 fi
 say "Drive đã đủ: eval/, dataset/, models/<run>/{adapter,merged}"
