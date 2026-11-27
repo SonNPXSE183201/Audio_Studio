@@ -6,70 +6,44 @@ paths:
   input_dir: "input"            # Chuong_0001.txt, Chuong_0002.txt ... (có thể để trong thư mục con)
   audio_dir: "output/audio"     # Chuong_0001.wav: audio chương đã hậu kỳ (WAV 24-bit, không nén)
   video_dir: "output/video"     # Chuong_0001-0010_Tap001.mp4
-  work_dir: "work"              # cache câu, đơn vị lặp video nền, log
+  work_dir: "work"              # giọng mẫu đã chọn, timeline chương, đơn vị lặp video nền, log
 
 # --- Giọng clone ---
 voice:
-  ref_audio: "assets/voice/voice_reference_clean.wav"   # wav hoặc mp3; sạch, không nhạc nền
-  ref_text: "assets/voice/voice_reference_clean.txt"    # lời đọc KHỚP CHÍNH XÁC với file giọng mẫu
+  ref_audio: "assets/voice/voice_reference_clean.wav"   # wav hoặc mp3; sạch, không nhạc nền. KHÔNG cần file .txt
   fallbacks: ["input/clone_voice_clean.wav", "input/clone_voice_clean.mp3"]
-  max_seconds: 10               # giọng mẫu dài hơn -> tự cắt ở chỗ ngừng tự nhiên (OmniVoice khuyên 3-10s).
-                                # Mẫu dài làm đọc nối/thừa/mất chữ đầu câu và chậm 2-3 lần. 0 = không cắt
+  # VieNeu chỉ lấy 8 s ĐẦU của giọng mẫu (cắt cứng, kể cả giữa chữ). Tool tự tìm các đoạn câu trọn vẹn
+  # 3-7,8 s (đầu/cuối ở chỗ ngừng sạch), cho mỗi đoạn đọc thử vài câu của chương đầu rồi giữ đoạn
+  # có giọng sinh ra GIỐNG giọng gốc nhất. Chọn 1 lần, lưu ở work/voice/ref_*.wav (+ .json điểm số).
+  audition: true                # false: lấy luôn đoạn có chỗ ngắt câu đẹp nhất, không đọc thử
+  audition_sentences: 6
 
-# --- OmniVoice ---
+# --- VieNeu-TTS v3 Turbo (https://github.com/pnnbao97/VieNeu-TTS) ---
+# Tách câu, chuẩn hóa số/viết tắt, nhịp nghỉ (đoạn 0,7 s / câu 0,5 s / trong câu 0,3 s) đều theo VieNeu.
+# Không có tham số tốc độ đọc: nhịp đọc đi theo giọng mẫu.
 tts:
-  model_id: "k2-fsa/OmniVoice"
-  # Cách sinh giọng giống hệt AI_Video_Studio (giọng mượt, không sước):
-  language: null                # null như AI_Video_Studio (OmniVoice tự nhận tiếng Việt)
-  dtype: "auto"                 # auto = fp16 (fp32 trên GTX 16xx). KHÔNG dùng bf16: giải mã âm thanh kém chính xác -> rè, sước
-  speed: 0.8                    # 0.8 = chậm hơn giọng mẫu 20% (model dễ sinh tiếng lấy hơi -> có bộ lọc bên dưới)
-  preprocess_prompt: true       # mặc định OmniVoice (như AI_Video_Studio): bỏ khoảng lặng thừa trong giọng mẫu
-                                # để model ước lượng đúng tốc độ nói -> không tự chèn ngắt quãng giữa câu
-  position_temperature: 5.0     # mặc định OmniVoice
-  num_step: 32                  # 32 = chất lượng chuẩn
-  guidance_scale: 2.0
-  seed: 1234                    # mỗi câu sinh với CÙNG seed -> ngữ điệu đồng đều giữa các câu
-  batch_size: 1                 # 1 = mỗi câu sinh riêng như AI_Video_Studio (giọng đồng nhất nhất).
-                                # Muốn tận dụng GPU thì chạy nhiều job (--jobs 2-3) thay vì tăng batch.
-                                # auto = nhiều câu một lượt (nhanh hơn nhưng mỗi câu một kiểu ngữ điệu)
-  batch_max_chars: 1800         # tổng ký tự tối đa mỗi batch (hạ nếu báo hết VRAM)
-  save_every: 64                # lưu cache sau mỗi N câu (chạy lại không mất việc)
-  max_chars: 300                # giữ CÂU TRỌN VẸN: cắt câu ở dấu phẩy làm mỗi nửa câu hạ giọng như hết câu
-                                # -> nghe "dừng đột ngột". Câu đọc lỗi vẫn được tự tách đôi để đọc lại.
-  merge_sentences: true
-  keep_chunk_cache: false       # false: xóa câu thô sau khi xong chương (tiết kiệm ổ pod)
-  # Hậu kỳ từng câu
-  trim_silence_db: -50          # cắt lặng nhẹ tay: giữ phụ âm đầu (s, x, h) và đuôi thanh điệu
-  lead_ms: 80
-  tail_ms: 180
-  target_db: -20                # cân bằng độ to mọi câu
-  max_gain_db: 6
-  fade_in_ms: 15
-  fade_out_ms: 40
-  room_tone_db: null            # null = khoảng nghỉ im lặng tuyệt đối (như AI_Video_Studio); -66 = thêm "không khí phòng" (nghe như tiếng xì nền)
-  suppress_breaths: true        # bỏ tiếng lấy hơi (hít vào) model tự sinh ở đầu/giữa câu
-  breath_reduce_db: -30         # mức giảm tiếng thở (-30 dB = gần như mất hẳn)
-  pauses_ms:                    # nhịp nghỉ sau câu theo dấu câu
-    comma: 240
-    sentence: 420
-    question: 460
-    ellipsis: 580
-    paragraph: 700
-    dialogue: 750
-    title: 1200
+  # Giọng đã fine-tune (pod/train_voice.sh): đặt thư mục model đã merge + tên giọng trong đó.
+  # Để null = clone tức thì từ voice.ref_audio bằng model gốc.
+  backbone_repo: null           # ví dụ "/workspace/audio_studio/voice_lora/output/giong_doc_e3/merged"
+  voice: null                   # ví dụ "Giọng đọc truyện"
+  backend: "auto"               # auto = GPU (PyTorch) nếu có CUDA, không thì CPU (ONNX)
+  precision: null               # chỉ cho CPU: "int8" nhanh ~1,6x nhưng cần CPU có VNNI
+  denoise: true                 # VieNeu khử nhiễu giọng mẫu trước khi clone
+  batch_size: 32                # GPU: số chunk sinh chung một lượt
+  max_chars: 256                # độ dài tối đa 1 chunk (mặc định VieNeu)
+  temperature: 0.8              # mặc định VieNeu (README: ~0.8 ổn định nhất)
+  top_k: 25
+  top_p: 0.95
+  repetition_penalty: 1.2
+  max_new_frames: 300
 
-# --- Nghe lại bằng ASR để đọc lại câu vấp / nuốt chữ / lặp từ ---
+# --- Nghe lại bằng ASR: chunk sai chữ / lặp từ thì đọc lại, giữ bản tốt nhất ---
 asr:
-  enabled: true                 # false: nhanh hơn ~15-20% nhưng không tự sửa câu đọc lỗi
+  enabled: true
   model_id: "vinai/PhoWhisper-large"   # PhoWhisper-medium nhẹ hơn nếu GPU nhỏ
-  batch_size: 8   # số đoạn nghe lại mỗi lượt (hết VRAM thì tool tự chia nhỏ)
+  batch_size: 8                 # số chunk nghe lại mỗi lượt (hết VRAM thì tool tự chia nhỏ)
   max_cer: 0.12                 # tỷ lệ sai ký tự tối đa (không tính tên riêng trong input/names.txt)
   max_attempts: 3
-  cps_min: 7                    # ký tự/giây: thấp hơn = kéo dài/kẹt, cao hơn = nuốt chữ
-  cps_max: 28
-  max_gap_ms: 1300              # khoảng câm giữa câu dài hơn = kẹt
-  max_tail_db: -18              # đuôi câu còn to hơn mức này (so với đỉnh) = bị cắt cụt
-  max_pitch_dev_st: 1.5         # cao độ câu lệch giọng mẫu quá 1,5 bán cung -> đọc lại (giữ MỘT giọng xuyên suốt)
 
 # --- Hậu kỳ audio chương ---
 master:

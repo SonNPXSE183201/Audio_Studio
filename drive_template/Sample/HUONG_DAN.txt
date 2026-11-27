@@ -5,8 +5,8 @@ ví dụ Giang_Than), rồi chạy pod với PROJECTS="Giang_Than".
 
 chuong/      Các chương: Chuong_0001.txt, Chuong_0002.txt, ... (số 4 chữ số)
              Tùy chọn: glossary.json (cách đọc riêng), names.txt (tên riêng, mỗi dòng 1 tên)
-voice/       voice_reference_clean.wav  (giọng mẫu 10-20 giây, sạch, không nhạc)
-             voice_reference_clean.txt  (lời đọc đúng từng chữ của file wav)
+voice/       voice_reference_clean.wav  (giọng mẫu 8-20 giây, sạch, không nhạc; KHÔNG cần file .txt.
+             VieNeu chỉ dùng tối đa 8 giây: tool tự cắt đoạn câu trọn vẹn giống giọng nhất)
 background/  background.mp4  (video nền 1-2 phút, tool lặp đến hết audio)
 Kenh/        Script_Intro.mp3       (chèn đầu mỗi tập)
              Script_Watermark.mp3   (chèn trước chương thứ 9 của tập)

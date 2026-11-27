@@ -148,9 +148,9 @@ curl -fsSL https://raw.githubusercontent.com/SonNPXSE183201/Audio_Studio/main/po
 
 Lệnh này:
 1. clone hoặc cập nhật code vào `/root/Audio_Studio`;
-2. cài `ffmpeg`, `rclone`, `omnivoice`, `transformers` vào venv dùng chung PyTorch CUDA của template;
+2. cài `ffmpeg`, `rclone`, `vieneu==3.8.5`, `transformers==4.57.6` vào venv dùng chung PyTorch 2.8 CUDA 12.8 của template;
 3. tạo cấu trúc `/workspace/audio_studio`, chép `config.yaml` mặc định (nếu chưa có);
-4. tải trước OmniVoice và PhoWhisper lên volume (chỉ lần đầu, các lần sau bỏ qua).
+4. tải trước VieNeu-TTS v3 Turbo, MOSS codec và PhoWhisper (chỉ lần đầu, các lần sau bỏ qua).
 
 Log cài đặt nằm ở `/workspace/audio_studio_setup.log`.
 
@@ -163,7 +163,7 @@ Drive của tôi/Dự án truyện/
 ├── Sample/            thư mục mẫu (chuong, voice, background, Kenh, video): copy + đổi tên cho bộ mới
 └── Đại Niết Bàn/      tên thư mục = tên bộ truyện trong PROJECTS
     ├── chuong/        Chuong_0001.txt ... Chuong_1500.txt (+ glossary.json, names.txt nếu có)
-    ├── voice/         voice_reference_clean.wav + voice_reference_clean.txt
+    ├── voice/         voice_reference_clean.wav (không cần .txt: tool tự cắt đoạn câu <= 8s cho VieNeu)
     ├── background/    background.mp4
     ├── Kenh/          Script_Intro.mp3, Script_Watermark.mp3, Script_Watermark1.mp3
     └── video/         tool upload video tập vào đây
@@ -215,7 +215,6 @@ Cần có:
 ├── input/names.txt                       (tùy chọn) tên nhân vật, mỗi dòng 1 tên
 ├── input/glossary.json                   (tùy chọn) cách đọc riêng
 ├── assets/voice/voice_reference_clean.wav
-├── assets/voice/voice_reference_clean.txt
 ├── assets/background/background.mp4
 ├── Kenh/Script_Intro.mp3, Script_Watermark.mp3, Script_Watermark1.mp3
 └── rclone.conf
@@ -289,13 +288,13 @@ bash run.sh start --project "Đại Niết Bàn" --range 751-1500   # pod 2
 | Tiến độ | `bash run.sh log` |
 | Tốc độ mỗi chương | dòng `Chương N: ... audio trong ... (xK thời gian thực)` |
 | GPU có chạy đầy không | `nvidia-smi -l 2` |
-| Câu còn nghi lỗi | `work/chXXXX/timeline.json` → `warnings` (có `time_sec` để nghe kiểm tra) |
+| Chunk còn nghi lỗi | `work/chXXXX/timeline.json` → `warnings` (văn bản + điều ASR nghe được) |
 | Audio chương | `output/audio/Chuong_XXXX.wav` (tải về nghe qua Jupyter) |
 | Log upload | `work/upload.log` |
 
 ## 9. Tắt pod rồi bật lại
 
-1. `bash run.sh stop` (hoặc cứ để, Stop pod cũng được: cache câu không mất).
+1. `bash run.sh stop` (hoặc cứ để, Stop pod cũng được: chương đã có audio không mất).
 2. Stop pod trên RunPod. Volume vẫn tính tiền lưu trữ nhưng rất rẻ.
 3. Start lại, chạy lại lệnh `bootstrap.sh` ở mục 4, rồi `bash run.sh start`: tool đọc tiếp đúng chỗ dừng.
 
@@ -345,12 +344,12 @@ So với cách đọc cũ (~2× thời gian thực, ~53 giờ trên RTX PRO 4500
 
 | Dấu hiệu | Cách xử lý |
 |---|---|
-| `PyTorch không thấy GPU` | chọn lại template RunPod PyTorch (CUDA) |
-| `Batch ... hết VRAM, chia nhỏ` liên tục | đặt `tts.batch_size` nhỏ hơn hoặc `batch_max_chars: 1200` |
-| Giọng đầu câu bị lạ / vấp | lời trong `voice_reference_clean.txt` không khớp giọng mẫu; sửa cho khớp từng chữ |
+| `PyTorch không thấy GPU` | chọn pod có driver CUDA 12.8 trở lên, template PyTorch 2.8 |
+| Hết VRAM (`out of memory`) | giảm `tts.batch_size` (vd 16) hoặc chạy ít job hơn |
+| Giọng clone không giống | xem `work/voice/ref_*.json` (điểm giống giọng từng đoạn mẫu); dùng giọng mẫu sạch hơn rồi xóa `work/voice/` để chọn lại |
 | Một từ luôn đọc sai | thêm vào `chuong/glossary.json` trên Drive |
 | Nhiều câu báo `sai xx% ký tự` dù nghe vẫn đúng | thường do tên riêng: thêm vào `chuong/names.txt` trên Drive |
-| `Không sinh được audio cho câu ...` (dừng chương) | câu có ký tự lạ; sửa câu đó trong file `.txt` rồi chạy lại (các câu khác đã có cache) |
+| `VieNeu trả audio rỗng cho ... chunk` (dừng chương) | chunk có ký tự lạ; sửa câu đó trong file `.txt` rồi chạy lại chương |
 | Video ra ngắn hơn audio | xem log `Video ra ...s nhưng audio ...s`; video nền hỏng, hãy thử file nền khác |
 | Upload lỗi | kiểm tra `rclone.conf`, `upload.remote_dir`; xem `work/upload.log` |
 | Muốn đọc lại 1 chương | `bash run.sh audio --range 15-15 --force` rồi xóa video tập chứa chương đó và chạy `bash run.sh video` |

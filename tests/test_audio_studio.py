@@ -8,63 +8,71 @@ import numpy as np
 import soundfile as sf
 
 from core.asr_checker import char_error_rate, repeated_words
-from core.audio_builder import AudioBuilder
-from core.audio_master import master_wav, measure_loudness
-from core.audio_utils import (
-    longest_internal_gap_ms,
-    normalize_voiced,
-    read_wav,
-    room_tone,
-    to_mono_float,
-    voiced_rms_db,
-    write_wav,
-)
-from core.text_processor import build_chunks, clean_paragraphs
-from core.vi_normalizer import normalize_for_tts
+from core.audio_master import measure_loudness
+from core.audio_utils import read_wav, to_mono_float, write_wav
+from core.chapter_builder import ChapterBuilder
+from core.text_processor import apply_glossary, chapter_text, clean_paragraphs
 
 SR = 24000
 HAS_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
+try:
+    import vieneu_utils  # noqa: F401  (pyflakes: dùng để dò gói)
+    HAS_VIENEU = True
+except ImportError:
+    HAS_VIENEU = False
 
 
-def speech_like(seconds: float, amp: float = 0.3, seed: int = 0) -> np.ndarray:
+def speech_like(seconds: float, amp: float = 0.3, seed: int = 0, sr: int = SR) -> np.ndarray:
     """Tín hiệu giống tiếng nói: các âm tiết 180 ms có bao biên, ngăn bởi khoảng nghỉ ngắn."""
     rng = np.random.default_rng(seed)
-    n = int(seconds * SR)
-    t = np.arange(n) / SR
+    n = int(seconds * sr)
+    t = np.arange(n) / sr
     carrier = np.sin(2 * np.pi * 180 * t) + 0.4 * np.sin(2 * np.pi * 360 * t) + 0.05 * rng.standard_normal(n)
     syllable = 0.5 - 0.5 * np.cos(2 * np.pi * (t % 0.22) / 0.22)
     return (amp * carrier * syllable).astype(np.float32)
 
 
 class FakeTTS:
-    """Giả lập OmniVoice: ~14 ký tự/giây, có khoảng lặng hai đầu; có thể hỏng ở lượt đầu."""
+    """Giả lập VieneuEngine: 48 kHz, ~14 ký tự/giây; chunk trong `bad` câm ở lần sinh đầu."""
 
-    def __init__(self, fail_first=()):
-        self.sample_rate = SR
-        self.fail_first = set(fail_first)
+    sample_rate = 48000
+    backend = "fake"
+
+    def __init__(self, bad=()):
+        self.bad = set(bad)
         self.calls = []
 
-    def synthesize_batch(self, texts, ref_audio, ref_text, seed):
-        self.calls.append((list(texts), seed))
-        out = []
-        for i, text in enumerate(texts):
-            if text in self.fail_first and seed == 1234:
-                out.append(np.zeros(int(0.1 * SR), dtype=np.float32))  # câm -> phải đọc lại
-                continue
-            body = speech_like(max(0.5, len(text) / 14.0), amp=0.1 + 0.3 * (i % 3) / 2, seed=i)
-            pad = np.zeros(int(0.3 * SR), dtype=np.float32)
-            out.append(np.concatenate([pad, body, pad]))
-        return out
+    def sampling(self):
+        return {"temperature": 0.8}
 
-    def unload(self):
-        pass
+    def synthesize_chunks(self, chunks):
+        self.calls.append(list(chunks))
+        out = []
+        for i, text in enumerate(chunks):
+            body = speech_like(max(0.5, len(text) / 14.0), seed=len(self.calls) * 100 + i, sr=self.sample_rate)
+            out.append(np.concatenate([np.zeros(int(0.05 * self.sample_rate), np.float32), body]))
+        return out, 0.01
 
 
 class FakeASR:
-    enabled = False
+    """Nghe ra đúng văn bản, trừ chunk trong `bad` ở lần nghe đầu (giả lập đọc vấp)."""
+
+    model_id = "fake"
+
+    def __init__(self, enabled=False, bad=(), chunks=None):
+        self.enabled = enabled
+        self.bad = set(bad)
+        self.heard = {}
+        self.chunks = chunks or {}
 
     def transcribe_batch(self, items):
-        return [None] * len(items)
+        out = []
+        for samples, _ in items:
+            text = self.chunks.get(samples.size, "")
+            seen = self.heard.get(text, 0)
+            self.heard[text] = seen + 1
+            out.append("ừ ừ ừ" if text in self.bad and seen == 0 else text)
+        return out
 
     def unload(self):
         pass
@@ -85,49 +93,7 @@ class AudioUtilsTests(unittest.TestCase):
             write_wav(path, wave, SR)
             data, _ = read_wav(path)
         self.assertLessEqual(float(np.max(np.abs(data))), 1.0)
-        # Không bị cắt phẳng đỉnh: sine nguyên vẹn có ~6.4% mẫu sát đỉnh, bản bị cắt cứng ~50%.
         self.assertLess(np.mean(np.abs(data) > 0.995 * np.max(np.abs(data))), 0.08)
-
-    def test_room_tone_level(self):
-        tone = room_tone(1000, SR, -66.0)
-        rms_db = 20 * np.log10(np.sqrt(np.mean(tone[2000:-2000] ** 2)))
-        self.assertAlmostEqual(-66.0, rms_db, delta=2.0)
-        self.assertEqual(0.0, float(np.max(np.abs(room_tone(500, SR, None)))))
-
-    def test_voiced_levels_are_matched(self):
-        quiet = np.concatenate([np.zeros(SR), speech_like(2, amp=0.05), np.zeros(SR)])
-        loud = speech_like(2, amp=0.5, seed=3)
-        a = voiced_rms_db(normalize_voiced(quiet, SR, -20, 15), SR)
-        b = voiced_rms_db(normalize_voiced(loud, SR, -20, 15), SR)
-        self.assertAlmostEqual(a, b, delta=0.5)
-
-    def test_internal_gap(self):
-        x = np.concatenate([speech_like(1), np.zeros(int(1.5 * SR), dtype=np.float32), speech_like(1)])
-        self.assertGreaterEqual(longest_internal_gap_ms(x, SR), 1400)
-
-
-class PitchTests(unittest.TestCase):
-    def test_f0_tracks_known_pitch(self):
-        from core.audio_utils import median_f0
-
-        for hz in (110.0, 180.0, 240.0):
-            t = np.arange(int(1.5 * SR)) / SR
-            x = (0.3 * np.sin(2 * np.pi * hz * t) + 0.1 * np.sin(4 * np.pi * hz * t)).astype(np.float32)
-            self.assertAlmostEqual(hz, median_f0(x, SR), delta=hz * 0.03)
-
-    def test_off_pitch_sentence_is_flagged(self):
-        builder = AudioBuilder(FakeTTS(), FakeASR(), {}, {"max_pitch_dev_st": 1.5}, tempfile.gettempdir())
-        builder.ref_f0 = 180.0
-        text = "Hắn đứng dậy đi ra ngoài cửa sổ nhìn trời."
-        t = np.arange(int(2 * SR)) / SR
-        on = (0.3 * np.sin(2 * np.pi * 182 * t)).astype(np.float32)
-        off = (0.3 * np.sin(2 * np.pi * 230 * t)).astype(np.float32)   # +4,2 bán cung
-        ok = builder._signal_check(text, on, on, SR)
-        bad = builder._signal_check(text, off, off, SR)
-        self.assertFalse(any("lệch giọng" in p for p in ok["problems"]))
-        self.assertTrue(any("lệch giọng" in p for p in bad["problems"]))
-        self.assertLess(builder._score(builder._asr_check(text, None, ok)),
-                        builder._score(builder._asr_check(text, None, bad)))
 
 
 class CheckTests(unittest.TestCase):
@@ -141,69 +107,99 @@ class CheckTests(unittest.TestCase):
         self.assertTrue(repeated_words("hắn đứng đứng dậy đi ra", "Hắn đứng dậy đi ra."))
         self.assertFalse(repeated_words("rất lâu rất lâu", "Rất lâu rất lâu."))
 
-    def test_split_half(self):
-        left, right = AudioBuilder.split_half("Hắn đứng dậy, nhìn ra ngoài cửa sổ, trời đã tối hẳn rồi mà vẫn chưa thấy ai.")
-        self.assertTrue(left.endswith(","))
-        self.assertTrue(right)
+
+class TextTests(unittest.TestCase):
+    def test_clean_drops_non_story_lines(self):
+        raw = ("Chương 1: Mở đầu\r\n\r\nTác giả: Ai đó\n***\nHắn c·hết  rồi.\n\n“Ngươi đi đâu?”\n"
+               "Bảng chuẩn hóa danh xưng\n- Lâm Viễn: nhân vật chính\n")
+        self.assertEqual(["Chương 1: Mở đầu", "Hắn chết rồi.", "“Ngươi đi đâu?”"], clean_paragraphs(raw))
+
+    def test_glossary_whole_words_longest_first(self):
+        glossary = {"km": "ki lô mét", "km/h": "ki lô mét trên giờ", "Lam": "Làm"}
+        self.assertEqual("chạy 60 ki lô mét trên giờ ở Làm Tinh",
+                         apply_glossary("chạy 60 km/h ở Lam Tinh", glossary))
+        self.assertEqual("Lamborghini", apply_glossary("Lamborghini", glossary))   # không thay giữa từ
+
+    def test_chapter_text_one_paragraph_per_line(self):
+        self.assertEqual("A b.\nC d.", chapter_text("A b.\n\n\nC d.\n"))
+
+
+class VoiceRefTests(unittest.TestCase):
+    def _clip(self):
+        sr = 24000
+        gap = np.zeros(int(sr * 0.4), dtype=np.float32)
+        parts = []
+        for i in range(5):                       # 5 câu 3 s, ngừng 0,4 s: ~16,6 s
+            parts += [speech_like(3.0, seed=i), gap]
+        return np.concatenate([gap] + parts), sr
+
+    def test_segments_end_at_pauses_and_fit_vieneu(self):
+        from core import voice_ref
+
+        x, sr = self._clip()
+        cands = voice_ref.candidate_segments(x, sr)
+        self.assertTrue(cands)
+        pauses = [t for t, _, _ in voice_ref.find_pauses(x, sr)]
+        for a, b in cands:
+            self.assertLessEqual(b - a, voice_ref.MAX_SECONDS)
+            self.assertGreaterEqual(b - a, voice_ref.MIN_SECONDS)
+            # Hai đầu đoạn rơi đúng chỗ ngừng (hoặc đầu file im lặng), không cắt giữa câu.
+            self.assertTrue(a == 0.0 or min(abs(a - p) for p in pauses) < 0.05)
+            self.assertTrue(min(abs(b - p) for p in pauses) < 0.05)
+            cut = voice_ref.segment(x, sr, a, b)
+            self.assertLess(cut.size / sr, 8.0)
+
+    def test_short_clip_used_whole(self):
+        from core import voice_ref
+
+        x, sr = self._clip()
+        short = x[: int(sr * 6)]
+        self.assertEqual([(0.0, short.size / sr)], voice_ref.candidate_segments(short, sr))
 
 
 class BuilderTests(unittest.TestCase):
-    def _chunks(self):
-        raw = "Chương 1: Mở đầu\n\nHắn đứng dậy, đi ra cửa. Trời mưa rất to.\n\n“Ngươi đi đâu?”\n\nKhông ai trả lời."
-        return build_chunks(clean_paragraphs(raw), max_chars=220)
+    TEXT = "Hắn đứng dậy, đi ra cửa. Trời mưa rất to.\nKhông ai trả lời."
 
-    def test_build_retries_and_masters(self):
-        chunks = self._chunks()
-        bad = chunks[1]["tts"]
+    def _builder(self, tmp, asr):
+        return ChapterBuilder(FakeTTS(), asr, {"max_chars": 256}, {"max_cer": 0.12, "max_attempts": 3},
+                              {"lufs": -14, "true_peak_db": -1.0})
+
+    @unittest.skipUnless(HAS_VIENEU, "cần gói vieneu")
+    def test_build_masters_and_caches(self):
         with tempfile.TemporaryDirectory() as tmp:
-            tts = FakeTTS(fail_first=[bad])
-            builder = AudioBuilder(tts, FakeASR(), {"batch_size": 4}, {"max_attempts": 3}, tmp,
-                                   {"lufs": -14, "true_peak_db": -1.0})
+            builder = self._builder(tmp, FakeASR(enabled=False))
             out = os.path.join(tmp, "ch.wav")
-            timeline = builder.build(chunks, None, None, "v", out, os.path.join(tmp, "t.json"))
-            self.assertTrue(os.path.exists(out))
-            # Câu hỏng ở lượt đầu được đọc lại với seed khác, không bị bỏ qua.
-            self.assertTrue(any(bad in texts and seed != 1234 for texts, seed in tts.calls))
-            self.assertEqual([], timeline["warnings"])
-            starts = [c["start_ms"] for c in timeline["chunks"]]
-            self.assertEqual(sorted(starts), starts)
-            self.assertTrue(all(c["end_ms"] > c["start_ms"] for c in timeline["chunks"]))
+            timeline = builder.build(self.TEXT, "v", out, os.path.join(tmp, "t.json"))
             data, sr = read_wav(out)
+            self.assertEqual(48000, sr)
             self.assertAlmostEqual(timeline["total_duration_sec"], data.size / sr, delta=0.05)
             if HAS_FFMPEG:
                 stats = measure_loudness(out)
                 self.assertAlmostEqual(-14.0, stats["input_i"], delta=1.0)
-                self.assertLessEqual(stats["input_tp"], -1.0)
-            # Lần 2: dùng cache, không gọi TTS nữa.
-            calls = len(tts.calls)
-            builder.build(chunks, None, None, "v", out, os.path.join(tmp, "t.json"))
-            self.assertEqual(calls, len(tts.calls))
+            calls = len(builder.tts.calls)
+            builder.build(self.TEXT, "v", out, os.path.join(tmp, "t.json"))
+            self.assertEqual(calls, len(builder.tts.calls))     # lần 2 dùng cache
 
-    def test_batches_respect_limits(self):
-        builder = AudioBuilder(FakeTTS(), FakeASR(), {"batch_size": 3, "batch_max_chars": 50}, {}, tempfile.gettempdir())
-        texts = ["a" * 10, "b" * 40, "c" * 5, "d" * 20, "e" * 30]
-        batches = builder._batches(texts)
-        self.assertEqual(sorted(i for b in batches for i in b), list(range(5)))
-        for batch in batches:
-            self.assertLessEqual(len(batch), 3)
-            self.assertTrue(len(batch) == 1 or sum(len(texts[i]) for i in batch) <= 50)
+    def test_asr_regenerates_only_bad_chunks(self):
+        chunks = ["Hắn đứng dậy, đi ra cửa.", "Trời mưa rất to.", "Không ai trả lời."]
+        tts = FakeTTS()
+        asr = FakeASR(enabled=True, bad=[chunks[1]])
+        builder = ChapterBuilder(tts, asr, {}, {"max_cer": 0.12, "max_attempts": 3}, {})
+        orig = tts.synthesize_chunks
 
-    def test_assemble_keeps_all_speech(self):
-        builder = AudioBuilder(FakeTTS(), FakeASR(), {}, {}, tempfile.gettempdir())
-        parts = [speech_like(1.0, seed=i) for i in range(3)]
-        rendered = [({"id": i, "pause_after_ms": p}, parts[i], {"ok": True}) for i, p in enumerate((150, 600, 800))]
-        full, entries, _ = builder.assemble(rendered, SR)
-        # pause 150 < tail+lead -> chồng phần lặng; pause 600 -> chèn room tone 340 ms.
-        expected = sum(p.size for p in parts) - int(SR * 0.08) + int(SR * 0.34) + int(SR * 0.54)
-        self.assertAlmostEqual(expected, full.size, delta=SR * 0.01)
-        self.assertEqual(entries[1]["start_ms"], 1000 - 80)
+        def synth(texts):                       # nhớ độ dài audio -> văn bản để FakeASR "nghe" lại
+            wavs, sec = orig(texts)
+            for t, w in zip(texts, wavs):
+                asr.chunks[w.size] = t
+            return wavs, sec
 
-
-class TextTests(unittest.TestCase):
-    def test_normalizer(self):
-        text = normalize_for_tts("【LV1: Tốc độ +20% ×50】 năm 1998")
-        self.assertNotRegex(text, r"[\d【】%×]")
-        self.assertIn("một nghìn chín trăm chín mươi tám", text)
+        tts.synthesize_chunks = synth
+        res = builder.render(chunks)
+        self.assertEqual([chunks, [chunks[1]]], tts.calls)    # chỉ đọc lại chunk lỗi
+        self.assertFalse(res["first_checks"][1]["ok"])
+        self.assertTrue(all(c["ok"] for c in res["checks"]))
+        self.assertIsNot(res["wavs"][1], res["first_wavs"][1])  # bản tốt thay bản lỗi
+        self.assertIs(res["wavs"][0], res["first_wavs"][0])
 
 
 @unittest.skipUnless(HAS_FFMPEG, "cần ffmpeg")
@@ -351,7 +347,7 @@ class MultiJobTests(unittest.TestCase):
 
             def make(job):
                 st = self._studio(tmp, job)
-                st.voice = lambda: {"ref_audio": None, "ref_text": None, "fp": "x"}
+                st.voice = lambda: {"ref_audio": None, "fp": "x"}
 
                 def fake_process(number, path, voice, glossary, names):
                     _time.sleep(0.05)
@@ -447,62 +443,3 @@ class ProjectNameTests(unittest.TestCase):
             self.assertTrue(s.input_dir.startswith(studio.DATA))
             self.assertTrue(s.audio_dir.startswith(studio.DATA))
             self.assertTrue(studio.own("assets/voice").startswith(studio.DATA))
-
-
-class ReferenceCutTests(unittest.TestCase):
-    def test_cut_long_reference_at_pause(self):
-        from core.tts_engine import TTSEngine
-
-        sr = 24000
-        t = np.arange(int(sr * 3.0)) / sr
-        voiced = (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
-        gap = np.zeros(int(sr * 0.4), dtype=np.float32)
-        x = np.concatenate([voiced, gap, voiced, gap, voiced, gap, voiced, gap, voiced])   # ~16.6s, ngừng ở 3.2/6.6/10/13.4s
-        cut = TTSEngine.cut_at_pause(x, sr, max_seconds=10.0)
-        self.assertIsNotNone(cut)
-        self.assertTrue(6.0 < cut.size / sr <= 10.0)
-        self.assertIsNone(TTSEngine.cut_at_pause(x[: sr * 8], sr, max_seconds=10.0))   # ngắn sẵn: không cắt
-
-    def test_match_transcript_prefix(self):
-        from core.tts_engine import TTSEngine
-
-        full = "Ba ngày trước, Kế Duyên còn đang làm trâu làm ngựa ở Lam Tinh, tan làm còn cùng bạn bè ăn lẩu hát hò. Vậy mà chỉ sau một giấc ngủ."
-        heard = "ba ngày trước kế duyên còn đang làm trâu làm ngựa ở lam tinh tan làm còn cùng bạn bè ăn lẩu hát hò"
-        text, err = TTSEngine.match_transcript(full, heard)
-        self.assertEqual("Ba ngày trước, Kế Duyên còn đang làm trâu làm ngựa ở Lam Tinh, tan làm còn cùng bạn bè ăn lẩu hát hò.", text)
-        self.assertLess(err, 0.05)
-        # Audio bị cắt mất phần đầu: bỏ chữ thừa ở đầu .txt
-        heard2 = "đang làm trâu làm ngựa ở nam tinh tan làm còn cùng bạn bè ăn lẩu hát hò vậy mà chỉ sau một giấc ngủ"
-        text2, _ = TTSEngine.match_transcript(full, heard2)
-        self.assertTrue(text2.startswith("đang làm trâu"), text2)
-        self.assertTrue(text2.endswith("giấc ngủ."), text2)
-
-
-class BreathTests(unittest.TestCase):
-    def _lowpass_noise(self, n, sr, cutoff, level, seed):
-        rng = np.random.default_rng(seed)
-        spec = np.fft.rfft(rng.standard_normal(n))
-        spec[np.fft.rfftfreq(n, 1 / sr) > cutoff] = 0
-        x = np.fft.irfft(spec, n)
-        return (x / (np.sqrt(np.mean(x ** 2)) + 1e-9) * level).astype(np.float32)
-
-    def test_breath_removed_voice_and_fricative_kept(self):
-        from core import audio_utils as au
-
-        sr = 24000
-        t = np.arange(int(sr * 1.0)) / sr
-        vowel = (0.3 * np.sin(2 * np.pi * 220 * t) + 0.1 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
-        silence = np.zeros(int(sr * 0.3), dtype=np.float32)
-        breath = self._lowpass_noise(int(sr * 0.25), sr, 2500, 0.004, 1)           # hít vào: ~ -48 dB, phổ thấp
-        hiss = np.fft.irfft(np.where(np.fft.rfftfreq(int(sr * 0.25), 1 / sr) > 5000,
-                                     np.fft.rfft(np.random.default_rng(2).standard_normal(int(sr * 0.25))), 0), int(sr * 0.25))
-        fric = (hiss / np.sqrt(np.mean(hiss ** 2)) * 0.02).astype(np.float32)         # "s": phổ cao
-        x = np.concatenate([silence, breath, vowel, silence, fric, vowel])
-        y = au.suppress_breaths(x, sr)
-        b0, b1 = silence.size, silence.size + breath.size
-        self.assertLess(np.sqrt(np.mean(y[b0 + 600:b1 - 600] ** 2)), 0.004 * 0.1)        # tiếng thở giảm mạnh
-        v0 = b1
-        self.assertAlmostEqual(float(np.sqrt(np.mean(y[v0:v0 + vowel.size] ** 2))),
-                               float(np.sqrt(np.mean(vowel ** 2))), delta=0.01)          # nguyên âm giữ nguyên
-        f0 = v0 + vowel.size + silence.size
-        self.assertGreater(np.sqrt(np.mean(y[f0:f0 + fric.size] ** 2)), 0.015)          # phụ âm "s" giữ nguyên

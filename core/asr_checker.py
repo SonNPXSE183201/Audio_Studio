@@ -77,7 +77,9 @@ class ASRChecker:
             from transformers import pipeline
 
             device = 0 if torch.cuda.is_available() else -1
-            dtype = torch.float16 if device == 0 else torch.float32
+            # GTX 16xx tính fp16 sai: Whisper fp16 chỉ nghe ra "-" (đo trên GTX 1650 Ti) -> mọi câu bị báo lỗi.
+            fp16 = device == 0 and "GTX 16" not in torch.cuda.get_device_name(0)
+            dtype = torch.float16 if fp16 else torch.float32
             log(f"Nạp ASR '{self.model_id}' để kiểm tra giọng đọc...", "ASR")
             self.pipe = pipeline(
                 "automatic-speech-recognition",

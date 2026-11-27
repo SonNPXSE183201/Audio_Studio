@@ -7,7 +7,7 @@
   python studio.py video --watch       job ghép video chạy ngầm: đủ 20 chương là ghép + upload
   python studio.py video [--finish]    ghép các tập đã đủ audio (--finish: gom cả tập lẻ cuối)
   python studio.py check               kiểm tra môi trường (ffmpeg, GPU, giọng mẫu, video nền)
-  python studio.py bench --price 0.69  đo tốc độ thật của pod, quy ra thời gian và chi phí
+  python studio.py bench --price 0.69  đo tốc độ + đánh giá ASR trên chương thật, quy ra chi phí
 """
 import argparse
 import glob
@@ -33,14 +33,18 @@ BASE = DATA
 
 from core import drive, locks  # noqa: E402
 from core.asr_checker import ASRChecker  # noqa: E402
-from core.audio_builder import AudioBuilder  # noqa: E402
-from core.text_processor import build_chunks, clean_paragraphs, extract_standardization_table  # noqa: E402
-from core.tts_engine import TTSEngine  # noqa: E402
+from core.chapter_builder import ChapterBuilder  # noqa: E402
+from core.text_processor import chapter_text, extract_standardization_table  # noqa: E402
+from core.audio_utils import write_wav  # noqa: E402
+from core.vieneu_engine import VieneuEngine, chunk_text, join_chunks  # noqa: E402
 from core.utils import (  # noqa: E402
     chapter_number, deep_merge, file_fingerprint, fingerprint, format_duration, load_config, log, read_json,
     set_log_file, write_json,
 )
 from core.video_maker import VideoMaker  # noqa: E402
+
+# Đổi cách chọn đoạn giọng mẫu thì tăng số này: các pod sẽ chọn lại thay vì dùng bản cũ trong work/voice.
+VOICE_PICK_VERSION = 1
 
 
 def rel(path: str) -> str:
@@ -140,27 +144,6 @@ def parse_range(text: Optional[str]) -> Tuple[int, int]:
     return int(a), int(b or a)
 
 
-def auto_batch_size(cfg: Dict[str, Any]) -> None:
-    """batch_size: auto -> chọn theo VRAM của pod."""
-    if str(cfg.get("batch_size", "auto")).lower() != "auto":
-        return
-    size = 4
-    try:
-        import torch
-
-        if torch.cuda.is_available():
-            vram = torch.cuda.get_device_properties(0).total_memory / 1024 ** 3
-            size = 24 if vram >= 70 else 16 if vram >= 40 else 8 if vram >= 19 else 4   # card "20 GB" báo ~19.6 GB
-            jobs = max(1, int(os.environ.get("AUDIO_STUDIO_GPU_JOBS", "1")))
-            size = max(2, size // jobs)   # nhiều job chung 1 GPU -> mỗi job batch nhỏ hơn
-            log(f"GPU {torch.cuda.get_device_name(0)} {vram:.0f} GB, {jobs} job -> batch {size} câu/lượt", "Studio")
-        else:
-            size = 1
-    except ImportError:
-        size = 1
-    cfg["batch_size"] = size
-
-
 class Studio:
     def __init__(self, cfg: Dict[str, Any], args: argparse.Namespace):
         self.cfg = cfg
@@ -175,7 +158,7 @@ class Studio:
             os.makedirs(d, exist_ok=True)
         self.first, self.last = parse_range(args.range)
         self.master_cfg = cfg.get("master", {})
-        self._audio: Optional[AudioBuilder] = None
+        self._audio: Optional[ChapterBuilder] = None
         self._render_queue: "queue.Queue[Optional[int]]" = queue.Queue()
         self._queued: set = set()
         self._lock = threading.Lock()
@@ -243,10 +226,9 @@ class Studio:
     # ------------------------------------------------------------ chapters
     def chapter_files(self) -> List[Tuple[int, str]]:
         files = glob.glob(os.path.join(self.input_dir, "**", "*.txt"), recursive=True)
-        voice_txt = os.path.abspath(rel(self.cfg.get("voice", {}).get("ref_text", "")) or "")
         items = []
         for path in files:
-            if os.path.abspath(path) == voice_txt or os.path.basename(path).startswith(("clone_voice", "_")):
+            if os.path.basename(path).startswith(("clone_voice", "_")):
                 continue
             number = chapter_number(path)
             if number != 999999 and self.first <= number <= self.last:
@@ -270,39 +252,70 @@ class Studio:
         return os.path.join(self.audio_dir, f"Chuong_{number:04d}.wav")
 
     # ------------------------------------------------------------ voice
-    def voice(self) -> Dict[str, Any]:
+    def voice_source(self) -> Optional[str]:
         vcfg = self.cfg.get("voice", {})
-        ref = ""
         for candidate in [vcfg.get("ref_audio", "")] + list(vcfg.get("fallbacks", [])):
             if candidate and os.path.exists(rel(candidate)):
-                ref = rel(candidate)
-                break
-        if not ref:
-            log("Không có giọng mẫu: OmniVoice sẽ tự chọn giọng (giọng có thể đổi giữa các câu!).", "Cảnh báo")
-            return {"ref_audio": None, "ref_text": None, "fp": "default"}
-        text_path = rel(vcfg.get("ref_text", ""))
-        if not os.path.exists(text_path):
-            text_path = os.path.splitext(ref)[0] + ".txt"
-        ref_text = ""
-        if os.path.exists(text_path):
-            with open(text_path, "r", encoding="utf-8") as handle:
-                ref_text = handle.read().strip()
-        prepared = os.path.join(self.work_dir, "voice", f"ref_{fingerprint(file_fingerprint(ref))}.wav")
-        if not os.path.exists(prepared):
-            TTSEngine.prepare_reference(ref, prepared)
-        prepared, ref_text = self._short_reference(prepared, ref_text, float(vcfg.get("max_seconds", 10)))
-        if not ref_text:
-            log("Thiếu file .txt của giọng mẫu: dùng ASR nghe ra lời mẫu (nên tự viết để chính xác).", "Cảnh báo")
-            from core.audio_utils import read_wav
+                return rel(candidate)
+        return None
 
-            samples, sr = read_wav(prepared)
-            ref_text = self.audio().asr.transcribe(samples, sr) or ""
-            if ref_text:
-                with open(text_path, "w", encoding="utf-8") as handle:
-                    handle.write(ref_text)
-                log(f"Lời mẫu: {ref_text}", "Studio")
-        log(f"Giọng mẫu: {os.path.basename(ref)}", "Studio")
-        return {"ref_audio": prepared, "ref_text": ref_text or None, "fp": fingerprint(file_fingerprint(ref), ref_text)}
+    def audition_texts(self) -> List[str]:
+        """Vài chunk thật của chương đầu để thử giọng (chunk đủ dài mới đo được độ giống giọng)."""
+        files = self.chapter_files()
+        if files:
+            with open(files[0][1], "r", encoding="utf-8") as handle:
+                text = chapter_text(handle.read(), self.load_extras()[0])
+        else:
+            text = self.BENCH_TEXT
+        chunks, _ = chunk_text(text, int(self.cfg.get("tts", {}).get("max_chars", 256)))
+        count = int(self.cfg.get("voice", {}).get("audition_sentences", 6))
+        return [c for c in chunks if len(c) >= 40][:count]
+
+    def voice(self) -> Dict[str, Any]:
+        """Giọng mẫu -> đoạn câu trọn vẹn <= 7,8 s clone tốt nhất (chọn 1 lần, lưu trong work/voice).
+
+        tts.voice đặt sẵn (model đã fine-tune giọng riêng) -> dùng thẳng giọng đó, không cần giọng mẫu.
+        """
+        tts_cfg = self.cfg.get("tts", {})
+        if tts_cfg.get("voice"):
+            engine = self.audio().tts
+            engine.use_preset(str(tts_cfg["voice"]))
+            log(f"Giọng: '{engine.voice_name}' của model {tts_cfg.get('backbone_repo') or 'VieNeu gốc'}", "Studio")
+            return {"ref_audio": None, "fp": fingerprint(tts_cfg.get("backbone_repo"), engine.voice_name)}
+        ref = self.voice_source()
+        if not ref:
+            raise RuntimeError("Không có giọng mẫu (voice.ref_audio): VieNeu cần một clip giọng để clone.")
+        vcfg = self.cfg.get("voice", {})
+        fp = fingerprint(file_fingerprint(ref), VOICE_PICK_VERSION, bool(tts_cfg.get("denoise", True)),
+                         bool(vcfg.get("audition", True)))
+        picked = os.path.join(self.work_dir, "voice", f"ref_{fp}.wav")
+        meta_path = os.path.splitext(picked)[0] + ".json"
+        engine = self.audio().tts
+        if not os.path.exists(picked):
+            os.makedirs(os.path.dirname(picked), exist_ok=True)
+            # Nhiều job cùng lúc: chỉ một job chọn giọng mẫu, job khác chờ kết quả.
+            lock = picked + ".lock"
+            if locks.claim(lock, self.job, stale_sec=1800):
+                try:
+                    texts = self.audition_texts() if vcfg.get("audition", True) else []
+                    meta = engine.pick_reference(ref, picked, texts)
+                    write_json(meta_path, {"source": os.path.basename(ref), **meta})
+                finally:
+                    locks.release(lock)
+            else:
+                log("Job khác đang chọn giọng mẫu, chờ...", "Giọng")
+                for _ in range(360):
+                    if os.path.exists(picked):
+                        break
+                    time.sleep(5)
+                else:
+                    raise RuntimeError("Hết thời gian chờ job khác chọn giọng mẫu.")
+        engine.set_voice(picked)
+        meta = read_json(meta_path, {}) or {}
+        sim = meta.get("similarity")
+        log(f"Giọng mẫu: {os.path.basename(ref)} -> đoạn {meta.get('segment')} ({meta.get('seconds')}s"
+            f"{f', giống giọng gốc {sim:.3f}' if sim is not None else ''})", "Studio")
+        return {"ref_audio": picked, "fp": fp}
 
     def progress(self) -> Dict[str, Any]:
         """Tiến độ thật của bộ truyện: chương nào chưa có audio mà tập của nó cũng chưa lên Drive."""
@@ -315,126 +328,12 @@ class Studio:
         return {"chapters": len(files), "episodes": len(episodes), "episodes_done": len(done),
                 "chapters_pending": len(pending), "first_pending": pending[0] if pending else None}
 
-    def _short_reference(self, prepared: str, ref_text: str, max_seconds: float) -> Tuple[str, str]:
-        """Giọng mẫu dài (> max_seconds) -> cắt ở chỗ ngừng tự nhiên + lấy đúng phần lời tương ứng.
-
-        Giọng mẫu dài (vd 18s) làm OmniVoice đọc nối sang câu mới (thừa/mất chữ đầu câu) và chậm 2-3 lần.
-        """
-        short = prepared.replace(".wav", f"_max{int(max(max_seconds, 0))}.wav")
-        short_txt = short.replace(".wav", ".txt")
-        if os.path.exists(short) and os.path.exists(short_txt):
-            with open(short_txt, "r", encoding="utf-8") as handle:
-                return short, handle.read().strip()
-        # Nhiều job cùng lúc: chỉ một job chọn giọng mẫu, job khác chờ kết quả.
-        lock = short + ".lock"
-        if not locks.claim(lock, self.job, stale_sec=1800):
-            log("Job khác đang chọn giọng mẫu, chờ...", "Studio")
-            for _ in range(180):
-                time.sleep(5)
-                if os.path.exists(short) and os.path.exists(short_txt):
-                    with open(short_txt, "r", encoding="utf-8") as handle:
-                        return short, handle.read().strip()
-            locks.claim(lock, self.job, stale_sec=0)
-        try:
-            return self._pick_reference(prepared, ref_text, max_seconds, short, short_txt)
-        finally:
-            locks.release(lock)
-
-    def _pick_reference(self, prepared: str, ref_text: str, max_seconds: float,
-                        short: str, short_txt: str) -> Tuple[str, str]:
-        from core import audio_utils as au
-
-        samples, sr = au.read_wav(prepared)
-        total = samples.size / sr
-        asr = self.audio().asr
-        if max_seconds > 0 and total > max_seconds:
-            cands = TTSEngine.candidate_segments(samples, sr, max_seconds)
-        else:
-            cands = [(0.0, total)]
-        if not cands:
-            log(f"Giọng mẫu dài {total:.1f}s nhưng không tìm được chỗ ngừng để cắt.", "Cảnh báo")
-            cands = [(0.0, total)]
-        # Mỗi ứng viên: đoạn audio + lời khớp (ASR nghe lại; lời lệch audio -> thừa/mất chữ đầu câu).
-        options = []
-        for a, b in cands:
-            cut = samples if (a, b) == (0.0, total) else TTSEngine.segment(samples, sr, a, b)
-            heard = asr.transcribe(cut, sr) if asr.enabled else None
-            if heard and ref_text:
-                text, err = TTSEngine.match_transcript(ref_text, heard)
-            else:
-                text, err = (heard or ref_text), 0.0
-            if text:
-                options.append({"a": a, "b": b, "cut": cut, "text": text, "err": err})
-        if not options:
-            log("Không nghe lại được giọng mẫu: dùng nguyên giọng mẫu và lời trong .txt.", "Cảnh báo")
-            return prepared, ref_text
-        best = options[0]
-        if len(options) > 1 and self.cfg.get("voice", {}).get("audition", True) and asr.enabled:
-            best = self._audition(options, samples, sr) or best
-        au.write_wav(short, best["cut"], sr, float32=True)
-        if best.get("pitch_target_hz"):
-            write_json(os.path.splitext(short)[0] + ".json", {"pitch_target_hz": best["pitch_target_hz"],
-                                                              "segment": [best["a"], best["b"]]})
-        with open(short_txt, "w", encoding="utf-8") as handle:
-            handle.write(best["text"])
-        log(f"Giọng mẫu {total:.1f}s -> dùng đoạn {best['a']:.1f}-{best['b']:.1f}s ({best['cut'].size / sr:.1f}s): "
-            f"«{best['text']}»", "Studio")
-        if best["err"] > 0.2:
-            log(f"Lời mẫu vẫn lệch audio {best['err']:.0%}: nên sửa file .txt cho khớp.", "Cảnh báo")
-        return short, best["text"]
-
-    def _audition(self, options, full: np.ndarray, sr: int):
-        """Thử giọng: mỗi đoạn mẫu đọc vài câu thật của truyện, chọn đoạn ít sai chữ + cao độ đều nhất."""
-        from core import audio_utils as au
-        from core.asr_checker import char_error_rate
-
-        files = self.chapter_files()
-        if not files:
-            return None
-        with open(files[0][1], "r", encoding="utf-8") as handle:
-            chunks = build_chunks(clean_paragraphs(handle.read()), int(self.cfg.get("tts", {}).get("max_chars", 160)))
-        texts = [c["tts"] for c in chunks if len(c["tts"]) >= 30][: int(self.cfg.get("voice", {}).get("audition_sentences", 12))]
-        if len(texts) < 4:
-            return None
-        base_f0 = au.median_f0(full, sr) or 0
-        builder = self.audio()
-        seed = int(self.cfg.get("tts", {}).get("seed", 1234))
-        log(f"Thử giọng: {len(options)} đoạn mẫu x {len(texts)} câu để chọn đoạn tốt nhất...", "Studio")
-        best, best_score = None, 1e9
-        for i, opt in enumerate(options):
-            wav = os.path.join(self.work_dir, "voice", f"audition_{i}.wav")
-            au.write_wav(wav, au.normalize_rms(opt["cut"], -20.0), sr, float32=True)
-            outs = []
-            for t in texts:
-                try:
-                    a, osr = builder.tts.synthesize(t, wav, opt["text"], seed)
-                    outs.append((t, a, osr))
-                except Exception as exc:  # noqa: BLE001
-                    log(f"  thử giọng lỗi: {exc}", "Cảnh báo")
-            if not outs:
-                continue
-            hyps = builder.asr.transcribe_batch([(a, osr) for _, a, osr in outs])
-            cer = [char_error_rate(t, h) if h else 1.0 for (t, _, _), h in zip(outs, hyps)]
-            st = [au.semitones(f, base_f0) for f in (au.median_f0(a, osr) for _, a, osr in outs) if f and base_f0]
-            st_arr = np.array(st) if st else np.array([9.0])
-            # Đồng bộ giọng = câu này không cao/thấp hơn câu kia (dao động), quan trọng hơn nhiều so với
-            # cả giọng cao hơn mẫu đều đặn (lệch trung bình).
-            score = 10 * float(np.mean(cer)) + 2.0 * float(np.std(st_arr)) + 0.25 * abs(float(np.median(st_arr)))
-            log(f"  đoạn {opt['a']:.1f}-{opt['b']:.1f}s: sai chữ {np.mean(cer):.1%}, cao độ {np.median(st_arr):+.2f} "
-                f"± {np.std(st_arr):.2f} bán cung -> điểm {score:.2f}", "Studio")
-            if score < best_score:
-                best, best_score = opt, score
-                if st and base_f0:
-                    opt["pitch_target_hz"] = round(base_f0 * 2 ** (float(np.median(st_arr)) / 12.0), 1)
-        return best
-
-    def audio(self) -> AudioBuilder:
+    def audio(self) -> ChapterBuilder:
         if self._audio is None:
             tts_cfg = dict(self.cfg.get("tts", {}))
-            auto_batch_size(tts_cfg)
-            tts = TTSEngine(tts_cfg)
+            tts = VieneuEngine(tts_cfg)
             asr = ASRChecker(self.cfg.get("asr", {}))
-            self._audio = AudioBuilder(tts, asr, tts_cfg, self.cfg.get("asr", {}), self.work_dir, self.master_cfg)
+            self._audio = ChapterBuilder(tts, asr, tts_cfg, self.cfg.get("asr", {}), self.master_cfg)
         return self._audio
 
     def load_extras(self) -> Tuple[Dict[str, str], List[str]]:
@@ -456,27 +355,16 @@ class Studio:
         started = time.time()
         with open(path, "r", encoding="utf-8") as handle:
             raw = handle.read()
-        paragraphs = clean_paragraphs(raw)
-        if not paragraphs:
+        text = chapter_text(raw, glossary)
+        if not text:
             log(f"Chương {number}: rỗng sau khi làm sạch, bỏ qua.", "Cảnh báo")
             return None
-        tts_cfg = self.cfg.get("tts", {})
-        chunks = build_chunks(
-            paragraphs,
-            max_chars=int(tts_cfg.get("max_chars", 220)),
-            merge_sentences=bool(tts_cfg.get("merge_sentences", True)),
-            pauses=tts_cfg.get("pauses_ms"),
-            glossary=glossary,
-        )
         builder = self.audio()
         builder.force = bool(self.args.force)
         builder.ignore_terms = names + [item["name"] for item in extract_standardization_table(raw)]
-        work = os.path.join(self.work_dir, f"ch{number:04d}")
-        log(f"===== Chương {number}: {len(chunks)} câu =====", "Studio")
-        timeline = builder.build(chunks, voice["ref_audio"], voice["ref_text"], voice["fp"],
-                                 out, os.path.join(work, "timeline.json"))
-        if not self.cfg.get("tts", {}).get("keep_chunk_cache", False):
-            builder.cleanup_cache(timeline)
+        log(f"===== Chương {number}: {len(text)} ký tự =====", "Studio")
+        timeline = builder.build(text, voice["fp"], out,
+                                 os.path.join(self.work_dir, f"ch{number:04d}", "timeline.json"))
         spent = time.time() - started
         log(f"Chương {number}: {format_duration(timeline['total_duration_sec'])} audio trong "
             f"{format_duration(spent)} (x{timeline['total_duration_sec'] / max(spent, 1):.1f} thời gian thực)", "Studio")
@@ -740,70 +628,128 @@ class Studio:
     )
 
     def bench(self) -> None:
-        """Đo tốc độ đọc thật trên máy đang chạy, quy ra thời gian và chi phí mỗi chương / tập."""
-        import tempfile
+        """Đo tốc độ đọc + đánh giá bước nghe lại (ASR) trên chương thật.
 
-        chapters = self.chapter_files()
-        if chapters:
-            with open(chapters[0][1], "r", encoding="utf-8") as handle:
-                text = handle.read()
-            source = os.path.basename(chapters[0][1])
-        else:
-            text, source = self.BENCH_TEXT * 12, "văn bản mẫu"
-        tts_cfg = self.cfg.get("tts", {})
+        Mỗi chương: VieNeu đọc một lượt (= tốc độ khi TẮT ASR), rồi ASR nghe lại toàn bộ chunk
+        (= chi phí khi BẬT ASR) và đọc lại chunk nghi lỗi. Chunk bị gắn cờ được lưu cả bản lượt
+        đầu lẫn bản cuối vào work/bench/<giờ>/ để nghe xem lỗi thật hay ASR nghe nhầm.
+        """
+        files = self.chapter_files()[: max(1, int(self.args.chapters))]
         glossary, names = self.load_extras()
-        chunks = build_chunks(clean_paragraphs(text), max_chars=int(tts_cfg.get("max_chars", 220)),
-                              pauses=tts_cfg.get("pauses_ms"), glossary=glossary)[: self.args.sentences]
-        voice = self.voice()
+        items = []
+        for number, path in files:
+            with open(path, "r", encoding="utf-8") as handle:
+                raw = handle.read()
+            items.append((f"Chuong_{number:04d}", chapter_text(raw, glossary),
+                          [i["name"] for i in extract_standardization_table(raw)]))
+        if not items:
+            items = [("van_ban_mau", self.BENCH_TEXT * 6, [])]
         builder = self.audio()
-        builder.ignore_terms = names
-        log(f"Benchmark {len(chunks)} câu từ {source}, batch {builder.cfg.get('batch_size')}, "
-            f"num_step {builder.cfg.get('num_step', 32)}, ASR {'bật' if builder.asr.enabled else 'tắt'}", "Bench")
-        # Khởi động (nạp model, mã hóa giọng mẫu) không tính vào thời gian đo.
-        warm = builder.tts.synthesize_batch(["Xin chào các bạn."], voice["ref_audio"], voice["ref_text"], 1)
-        if builder.asr.enabled and warm and warm[0] is not None:
+        if self.args.no_asr:
+            builder.asr.enabled = False
+        started = time.time()
+        voice = self.voice()
+        voice_sec = time.time() - started
+        # Khởi động (CUDA graph, nạp ASR) không tính vào thời gian đo.
+        warm, _ = builder.tts.synthesize_chunks(["Xin chào các bạn, đây là câu khởi động để đo tốc độ."])
+        if builder.asr.enabled:
             builder.asr.transcribe_batch([(warm[0], builder.tts.sample_rate)])
-        with tempfile.TemporaryDirectory() as tmp:
-            builder.cache_dir = tmp
-            builder.force = True
-            started = time.time()
-            infos = builder.render_chunks(chunks, voice["ref_audio"], voice["ref_text"],
-                                          builder._synth_fp(voice["fp"]))
-            spent = time.time() - started
-        audio_sec = sum(float(i.get("duration_s", 0)) for i in infos)
-        pauses = sum(int(c["pause_after_ms"]) for c in chunks) / 1000.0
-        total_audio = audio_sec + pauses
-        speed = total_audio / max(spent, 1e-6)
-        retries = sum(1 for i in infos if int(i.get("attempt", 1)) > 1 or i.get("split"))
-        gpu = "CPU"
+        out_dir = os.path.join(self.work_dir, "bench", time.strftime("%Y%m%d_%H%M%S"))
+        os.makedirs(out_dir, exist_ok=True)
+        sr = builder.tts.sample_rate
+        max_cer = float(self.cfg.get("asr", {}).get("max_cer", 0.12))
+        report: Dict[str, Any] = {"backend": builder.tts.backend, "voice": voice,
+                                  "voice_pick_sec": round(voice_sec, 1), "asr": builder.asr.enabled,
+                                  "asr_model": builder.asr.model_id, "max_cer": max_cer, "chapters": []}
+        totals = {"audio": 0.0, "tts1": 0.0, "tts": 0.0, "asr": 0.0, "chunks": 0, "flag1": 0, "flag": 0}
+        cers: List[float] = []
+        for name, text, extra_names in items:
+            builder.ignore_terms = names + extra_names
+            chunks, gaps = chunk_text(text, int(self.cfg.get("tts", {}).get("max_chars", 256)))
+            res = builder.render(chunks)
+            stats = res["stats"]
+            final = join_chunks(res["wavs"], gaps)
+            write_wav(os.path.join(out_dir, f"{name}.wav"), final, sr)
+            audio_sec = final.size / sr
+            flagged = []
+            for i, (c1, c2) in enumerate(zip(res["first_checks"], res["checks"])):
+                if c1.get("cer") is not None:
+                    cers.append(c1["cer"])
+                if not c1.get("ok", True):
+                    base = os.path.join(out_dir, f"{name}_chunk{i:03d}")
+                    write_wav(base + "_luot1.wav", res["first_wavs"][i], sr)
+                    write_wav(base + "_cuoi.wav", res["wavs"][i], sr)
+                    flagged.append({"chunk": i, "text": chunks[i], "luot1": c1, "cuoi": c2})
+            still = sum(1 for c in res["checks"] if not c.get("ok", True))
+            report["chapters"].append({
+                "name": name, "chars": len(text), "chunks": len(chunks), "audio_sec": round(audio_sec, 1),
+                "tts_first_sec": round(stats["tts_first_sec"], 1), "tts_total_sec": round(stats["tts_sec"], 1),
+                "asr_sec": round(stats["asr_sec"], 1), "flagged_first": len(flagged), "flagged_final": still,
+                "flagged": flagged})
+            totals["audio"] += audio_sec
+            totals["tts1"] += stats["tts_first_sec"]
+            totals["tts"] += stats["tts_sec"]
+            totals["asr"] += stats["asr_sec"]
+            totals["chunks"] += len(chunks)
+            totals["flag1"] += len(flagged)
+            totals["flag"] += still
+            log(f"{name}: {audio_sec / 60:.1f} phút audio, {len(chunks)} chunk | đọc {stats['tts_first_sec']:.0f}s"
+                + (f", ASR {stats['asr_sec']:.0f}s, đọc lại {stats['tts_sec'] - stats['tts_first_sec']:.0f}s | "
+                   f"nghi lỗi {len(flagged)} -> còn {still}" if builder.asr.enabled else ""), "Bench")
+        no_asr = totals["tts1"]
+        with_asr = totals["tts"] + totals["asr"]
+        report["machine"] = self._machine()
+        summary = {
+            "audio_min": round(totals["audio"] / 60, 2),
+            "chunks": totals["chunks"],
+            "speed_no_asr_x": round(totals["audio"] / max(no_asr, 1e-6), 1),
+            "speed_with_asr_x": round(totals["audio"] / max(with_asr, 1e-6), 1) if builder.asr.enabled else None,
+            "asr_overhead_pct": round(100 * (with_asr - no_asr) / max(no_asr, 1e-6)) if builder.asr.enabled else None,
+            "flagged_first_pct": round(100 * totals["flag1"] / max(totals["chunks"], 1), 2),
+            "flagged_final_pct": round(100 * totals["flag"] / max(totals["chunks"], 1), 2),
+        }
+        if cers:
+            summary.update({f"cer_{k}": round(float(v), 4) for k, v in (
+                ("mean", np.mean(cers)), ("p50", np.percentile(cers, 50)),
+                ("p90", np.percentile(cers, 90)), ("p99", np.percentile(cers, 99)))})
+        report["summary"] = summary
+        write_json(os.path.join(out_dir, "report.json"), report)
+        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 20))
+        chapter_audio_min = totals["audio"] / 60 / max(len(items), 1)
+        lines = [f"Máy: {report['machine']} | VieNeu backend {builder.tts.backend} | chọn giọng mẫu {voice_sec:.0f}s",
+                 f"{len(items)} chương = {summary['audio_min']:.1f} phút audio, {totals['chunks']} chunk"]
+        modes = [("TẮT ASR", no_asr)] + ([("BẬT ASR", with_asr)] if builder.asr.enabled else [])
+        for label, secs in modes:
+            speed = totals["audio"] / max(secs, 1e-6)
+            chapter_min = chapter_audio_min / speed
+            line = (f"{label}: nhanh gấp {speed:.1f} lần thời gian thực -> 1 chương ~{chapter_min * 60:.0f}s, "
+                    f"1 tập {per} chương ~{chapter_min * per:.1f} phút")
+            if self.args.price:
+                line += f", ~${float(self.args.price) * chapter_min * per / 60:.3f}/tập"
+            lines.append(line)
+        if builder.asr.enabled and cers:
+            lines += [f"ASR tốn thêm {summary['asr_overhead_pct']}% thời gian so với chỉ đọc",
+                      f"Sai ký tự (CER) lượt đầu: trung bình {summary['cer_mean']:.1%}, trung vị "
+                      f"{summary['cer_p50']:.1%}, p90 {summary['cer_p90']:.1%}, p99 {summary['cer_p99']:.1%}",
+                      f"Chunk nghi lỗi (CER > {max_cer:.0%} hoặc lặp từ): lượt đầu {totals['flag1']} "
+                      f"({summary['flagged_first_pct']}%), sau đọc lại còn {totals['flag']} "
+                      f"({summary['flagged_final_pct']}%)"]
+        lines.append(f"Chi tiết + file nghe thử: {out_dir}")
+        for line in lines:
+            log(line, "Bench")
+
+    @staticmethod
+    def _machine() -> str:
         try:
             import torch
 
             if torch.cuda.is_available():
-                gpu = torch.cuda.get_device_name(0)
+                props = torch.cuda.get_device_properties(0)
                 peak = torch.cuda.max_memory_allocated() / 1024 ** 3
-                gpu += f" (VRAM dùng tối đa {peak:.1f} GB)"
+                return f"{props.name} {props.total_memory / 1024 ** 3:.0f} GB (VRAM dùng tối đa {peak:.1f} GB)"
         except ImportError:
             pass
-        chapter_min = float(self.args.chapter_minutes)
-        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 20))
-        chapter_gpu_min = chapter_min / speed
-        lines = [
-            f"Máy: {gpu}",
-            f"Đọc {len(chunks)} câu = {total_audio / 60:.1f} phút audio trong {spent / 60:.1f} phút "
-            f"-> nhanh gấp {speed:.1f} lần thời gian thực ({retries} câu phải đọc lại)",
-            f"1 chương ~{chapter_min:.0f} phút audio: ~{chapter_gpu_min:.1f} phút GPU",
-            f"1 tập {per} chương: ~{chapter_gpu_min * per:.0f} phút",
-            f"1 giờ pod: ~{60 / chapter_gpu_min:.0f} chương (~{speed:.1f} giờ audio)",
-        ]
-        if self.args.price:
-            price = float(self.args.price)
-            lines += [
-                f"Giá ${price:.2f}/giờ: ~${price * chapter_gpu_min / 60:.3f}/chương, "
-                f"~${price * chapter_gpu_min * per / 60:.2f}/tập, ~${price / speed:.3f}/giờ audio",
-            ]
-        for line in lines:
-            log(line, "Bench")
+        return f"CPU {os.cpu_count()} luồng"
 
     # ------------------------------------------------------------ check
     def check(self) -> None:
@@ -822,9 +768,16 @@ class Studio:
                 props = torch.cuda.get_device_properties(0)
                 log(f"GPU: {props.name} {props.total_memory / 1024 ** 3:.0f} GB, bf16={torch.cuda.is_bf16_supported()}", "Check")
             else:
-                log("GPU: không có (chạy CPU sẽ rất chậm)", "Check")
+                log("GPU: không có (VieNeu chạy CPU/ONNX, chậm hơn GPU ~25 lần)", "Check")
         except ImportError:
-            log("torch: chưa cài", "Check")
+            log("torch: chưa cài (VieNeu chạy CPU/ONNX)", "Check")
+        try:
+            from importlib.metadata import version
+
+            log(f"vieneu: {version('vieneu')}", "Check")
+        except Exception:  # noqa: BLE001
+            log("vieneu: THIẾU (pip install -r requirements.txt)", "Check")
+            ok = False
         vcfg = self.cfg.get("voice", {})
         log(f"Giọng mẫu: {rel(vcfg.get('ref_audio', '')) if os.path.exists(rel(vcfg.get('ref_audio', ''))) else 'THIẾU'}", "Check")
         bg = self.background_video()
@@ -870,8 +823,8 @@ def main() -> int:
     parser.add_argument("--force", action="store_true", help="đọc lại cả chương đã có audio")
     parser.add_argument("--stop-on-error", action="store_true")
     parser.add_argument("--price", type=float, help="bench: giá pod $/giờ để tính chi phí")
-    parser.add_argument("--sentences", type=int, default=48, help="bench: số câu đo (mặc định 48)")
-    parser.add_argument("--chapter-minutes", type=float, default=8.0, help="bench: số phút audio 1 chương")
+    parser.add_argument("--chapters", type=int, default=2, help="bench: số chương thật để đo (mặc định 2)")
+    parser.add_argument("--no-asr", action="store_true", help="bench: chỉ đo tốc độ đọc, không nghe lại")
     parser.add_argument("--project", help="tên bộ truyện: dữ liệu riêng ở projects/<tên>, {project} trong config")
     parser.add_argument("--job", help="tên job (log, khóa), ví dụ A, B")
     parser.add_argument("--watch", action="store_true", help="video: chạy ngầm, đủ chương là ghép tập")

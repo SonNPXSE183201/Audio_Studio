@@ -25,32 +25,28 @@ curl -fsSL https://raw.githubusercontent.com/SonNPXSE183201/Audio_Studio/main/po
 | Bước | Tool làm gì | Tự kiểm tra |
 |---|---|---|
 | Làm sạch | Bỏ bảng chuẩn hóa danh xưng, dòng "NGUYÊN TÁC/Thời gian", `***`; sửa dấu câu dính chữ; `c·hết` → `chết` | — |
-| Chuẩn hóa để đọc | Số (`1.500` → một nghìn năm trăm), %, giờ, đơn vị, tiền tệ, `Lv`, `【】`, từ mượn (hack, game, VIP…) | cách đọc riêng trong `chuong/glossary.json` (Drive) |
-| Chia câu | Mỗi đoạn đọc là **câu trọn vẹn** (≤ 300 ký tự: giữ câu trọn vẹn, không cắt đôi ở dấu phẩy); chỉ cắt ở dấu phẩy khi câu quá dài | nhịp nghỉ theo dấu câu, đoạn văn, lời thoại |
-| Đọc | OmniVoice clone giọng mẫu giống hệt cách của AI_Video_Studio: **fp16**, **mỗi câu sinh riêng với cùng seed** (ngữ điệu đồng đều), giọng mẫu mã hóa 1 lần; muốn nhanh thì chạy nhiều job song song | — |
-| Một giọng xuyên suốt | Giọng mẫu giữ nguyên nhịp ngắt nghỉ tự nhiên; đo **cao độ từng câu so với giọng mẫu**, lệch quá 1,5 bán cung thì đọc lại và chọn bản gần giọng mẫu nhất | không còn câu cao câu thấp |
-| Nghe lại | Kiểm tra tốc độ đọc, khoảng câm giữa câu, đuôi câu cụt; **PhoWhisper nghe lại theo batch**: sai > 12% ký tự hoặc lặp từ thì đọc lại (seed khác, tối đa 3 lượt) | vẫn lỗi thì **tách đôi câu** đọc từng nửa; không bao giờ bỏ qua câu |
-| Nối câu | Cắt lặng nhẹ tay (giữ phụ âm đầu, đuôi thanh điệu), **cân bằng độ to từng câu**, fade mềm, khoảng nghỉ có "không khí phòng" thay vì im lặng tuyệt đối | không có tiếng click, câu không to nhỏ lệch nhau |
-| Hậu kỳ | Lọc ù 70 Hz, nén nhẹ 2:1, chuẩn **−14 LUFS** (chuẩn YouTube) bằng gain cố định + limiter chặn đỉnh −1 dBTP | không "phồng xẹp", không vỡ tiếng |
+| Đọc | **VieNeu-TTS v3 Turbo** (48 kHz) theo đúng logic của VieNeu: sea-g2p chuẩn hóa số, ký hiệu, viết tắt và tách câu; gom câu thành chunk ≤ 256 ký tự; GPU sinh nhiều chunk một lượt; nghỉ 0,7 s giữa đoạn, 0,5 s giữa câu, 0,3 s trong câu | cách đọc riêng trong `chuong/glossary.json` (Drive) |
+| Giọng mẫu | VieNeu chỉ lấy 8 s đầu của clip mẫu: tool tự cắt các **đoạn câu trọn vẹn 3–7,8 s** ở chỗ ngừng sạch, cho mỗi đoạn đọc thử vài câu của chương đầu, giữ đoạn có giọng sinh ra **giống giọng gốc nhất** (so hồ sơ giọng) | không cần file `.txt` lời mẫu |
+| Nghe lại | PhoWhisper nghe lại từng chunk: sai > 12% ký tự hoặc lặp từ thì đọc lại (tối đa 3 lượt), giữ bản tốt nhất | chunk vẫn nghi lỗi ghi vào `timeline.json` |
+| Hậu kỳ | Lọc ù 70 Hz, chuẩn **−14 LUFS** (chuẩn YouTube) bằng gain cố định + limiter chặn đỉnh −1 dBTP | không "phồng xẹp", không vỡ tiếng |
 | Ghép tập | Intro + chương 1–8 + watermark + 9–16 + watermark + 17–20, nối WAV không nén (chính xác từng mẫu) | không hụt tiếng ở chỗ nối |
 | Video | Video nền chuẩn hóa **1 lần** thành đơn vị lặp (crossfade cuối→đầu để lặp liền mạch), lặp bằng concat copy; audio nén **AAC 192k 48 kHz stereo đúng 1 lần** | độ dài hình = độ dài tiếng (sai < 0,15 s) |
 | Lấy dữ liệu | Tải chương `.txt` + giọng mẫu, video nền, intro từ Google Drive; 20 phút xem lại một lần để lấy chương mới | tập đã có trên Drive thì bỏ qua, pod mới tự chạy tiếp |
 | Đóng gói | Đẩy lên Drive bằng rclone, thành công thì xóa video và audio chương, để lại `.done` | lỗi mạng thì giữ file, lần sau thử lại |
 
-Mọi bước có cache: pod tắt giữa chừng thì lần sau chạy tiếp từ câu đang đọc dở (lưu sau mỗi 64 câu).
+Mỗi chương là một đơn vị: pod tắt giữa chừng thì lần sau đọc tiếp từ chương chưa có audio (GPU đọc 1 chương chỉ mất vài chục giây nên không cần cache từng câu).
 
 ## Vì sao giọng không còn sướt / mất tiếng (so với DocTruyenV2)
 
 | Lỗi cũ | Hậu quả | Audio Studio |
 |---|---|---|
-| Câu TTS lỗi bị **bỏ qua** | mất câu, truyện nhảy cóc | đọc lại → tách đôi → dừng chương nếu vẫn hỏng, không bao giờ xuất audio thiếu |
+| Câu TTS lỗi bị **bỏ qua** | mất câu, truyện nhảy cóc | chunk rỗng thì dừng chương, không bao giờ xuất audio thiếu |
 | Audio nén mất dữ liệu **3 lần** (MP3 chương → MP3 tập 128k → AAC 128k) | tiếng sướt, rè, xì | WAV không nén đến bước cuối, nén AAC 192k **1 lần** |
 | Nối MP3 | hụt tiếng / click ở chỗ nối chương, intro | nối WAV chính xác từng mẫu |
 | `-stream_loop -1 -c:v copy` trực tiếp | timestamp gãy ở chỗ lặp: khựng hình, có máy mất tiếng | đơn vị lặp chuẩn hóa + concat liên tục |
-| Không chuẩn hóa số, ký hiệu | đọc vấp ở `1.500`, `20%`, `【】`, từ tiếng Anh | bộ chuẩn hóa tiếng Việt |
+| Không chuẩn hóa số, ký hiệu | đọc vấp ở `1.500`, `20%`, `【】`, từ tiếng Anh | sea-g2p của VieNeu |
 | Không nghe lại | câu vấp, nuốt chữ lọt vào video | ASR nghe lại + đọc lại |
-| Câu to câu nhỏ, im lặng tuyệt đối giữa câu | nghe giật cục | cân bằng độ to, room tone, fade mềm |
-| Mỗi câu mã hóa lại giọng mẫu, sinh từng câu một | chậm, tốn tiền pod | mã hóa 1 lần, sinh theo batch |
+| Mỗi câu mã hóa lại giọng mẫu, sinh từng câu một | chậm, tốn tiền pod | hồ sơ giọng tạo 1 lần, GPU sinh 32 chunk một lượt |
 
 ## Chuẩn bị dữ liệu (Google Drive)
 
@@ -112,7 +108,7 @@ bash run.sh video --finish           # gom cả tập lẻ cuối truyện (vd. 
 bash run.sh audio --range 15-15 --force   # đọc lại chương 15
 ```
 
-Trên máy Windows có GPU: `python studio.py check`, `python studio.py run`… (cần ffmpeg trong PATH và Python có torch CUDA + omnivoice).
+Trên máy Windows có GPU: `python studio.py check`, `python studio.py run`… (cần ffmpeg trong PATH và `pip install -r requirements.txt`; không có torch CUDA thì VieNeu chạy CPU/ONNX, chậm hơn nhiều).
 
 ## Cấu trúc thư mục
 
@@ -126,14 +122,14 @@ Audio_Studio/
 ├── requirements.txt
 ├── pod/
 │   ├── bootstrap.sh        Một lệnh cho pod mới/vừa Start: clone code + cài đặt
-│   └── setup_pod.sh        Cài ffmpeg, rclone, omnivoice; tải trước model lên volume
+│   └── setup_pod.sh        Cài ffmpeg, rclone, torch 2.8 + vieneu; tải trước model lên volume
 ├── core/
-│   ├── text_processor.py   Làm sạch chương, chia câu, nhịp nghỉ theo dấu câu
-│   ├── vi_normalizer.py    Chuẩn hóa tiếng Việt để đọc (số, ký hiệu, từ mượn)
-│   ├── tts_engine.py       OmniVoice: voice prompt dùng lại, sinh theo batch, tự chia batch khi hết VRAM
+│   ├── text_processor.py   Làm sạch file chương, glossary của bộ truyện
+│   ├── voice_ref.py        Tìm đoạn câu trọn vẹn ≤ 7,8 s trong giọng mẫu (ứng viên cho VieNeu)
+│   ├── vieneu_engine.py    VieNeu v3 Turbo: chunk + sinh + ghép theo logic VieNeu, thử giọng chọn đoạn mẫu
+│   ├── chapter_builder.py  Đọc cả chương, nghe lại + đọc lại chunk lỗi, hậu kỳ, timeline
 │   ├── asr_checker.py      PhoWhisper nghe lại theo batch, tỷ lệ sai ký tự (bỏ qua tên riêng), lặp từ
-│   ├── audio_builder.py    Đọc theo lượt, đọc lại câu lỗi, tách đôi câu, nối mượt, cache
-│   ├── audio_utils.py      Xử lý audio numpy: cắt lặng, fade, cân bằng độ to, room tone, kiểm tra tín hiệu
+│   ├── audio_utils.py      Đọc/ghi WAV, resample, cắt lặng
 │   ├── audio_master.py     Hậu kỳ FFmpeg: lọc ù, chuẩn LUFS 2 lượt, limiter
 │   ├── video_maker.py      Đơn vị lặp video nền, nối audio tập, xuất MP4
 │   ├── drive.py            Upload rclone
@@ -153,15 +149,16 @@ Audio_Studio/
 ├── assets/voice/           Giọng mẫu
 ├── assets/background/      Video nền
 ├── Kenh/                   Intro, watermark
-├── output/audio/           Chuong_0001.wav … (WAV 24-bit đã hậu kỳ)
+├── output/audio/           Chuong_0001.wav … (WAV 24-bit 48 kHz đã hậu kỳ)
 ├── output/video/           Chuong_0001-0020_Tap001.mp4 (hoặc .done sau khi lên Drive)
 ├── work/
-│   ├── tts/                Câu đã đọc (cache, tự xóa sau khi xong chương)
-│   ├── chXXXX/timeline.json  Mốc thời gian từng câu + danh sách câu còn nghi lỗi (warnings)
+│   ├── voice/              Đoạn giọng mẫu đã chọn (ref_*.wav) + điểm thử giọng (ref_*.json)
+│   ├── chXXXX/timeline.json  Số chunk, thời gian đọc/ASR, các chunk còn nghi lỗi (warnings)
+│   ├── bench/              Kết quả `bench`: report.json + file nghe thử chunk bị gắn cờ
 │   ├── video/              Đơn vị lặp video nền, intro đã chuẩn hóa
 │   ├── logs/               Log theo ngày
 │   └── studio_run.log      Log chạy nền
-└── .cache/huggingface/     Model OmniVoice, PhoWhisper (tải 1 lần)
+└── .cache/huggingface/     Model VieNeu, MOSS codec, PhoWhisper (tải 1 lần)
 ```
 
 ## Tùy chỉnh thường gặp (`config.yaml`)
@@ -169,17 +166,14 @@ Audio_Studio/
 | Muốn | Sửa |
 |---|---|
 | To hơn / nhỏ hơn | `master.lufs`: −14 (mặc định, chuẩn YouTube), −13 to hơn, −16 nhỏ hơn |
-| Nghỉ lâu hơn giữa câu, đoạn | `tts.pauses_ms` |
-| Nhanh hơn (rẻ hơn) | `tts.num_step: 24` (nghe thử trước), `asr.model_id: vinai/PhoWhisper-medium`, hoặc `asr.enabled: false` |
-| Đọc chậm/nhanh | `tts.speed` (nên giữ 1.0) |
+| Nhanh hơn (rẻ hơn) | `asr.enabled: false` (xem kết quả `bench`), hoặc `asr.model_id: vinai/PhoWhisper-medium` |
+| Đọc chậm/nhanh | VieNeu không có tham số tốc độ: nhịp đọc theo giọng mẫu → chọn giọng mẫu đọc chậm hơn |
 | Một từ bị đọc sai | thêm vào `chuong/glossary.json` trên Drive: `{"từ gốc": "cách đọc"}` |
 | ASR báo sai ở tên nhân vật | thêm tên vào `chuong/names.txt` trên Drive |
-| Giọng câu cao câu thấp | hạ `asr.max_pitch_dev_st` (vd. 1.0: khóa cao độ chặt hơn, đọc lại nhiều hơn) hoặc hạ `tts.position_temperature` |
-| Đọc ngắt quãng giữa câu | giữ `tts.preprocess_prompt: true` (mặc định OmniVoice) |
-| Nghe lẹt xẹt, sước | `tts.dtype: auto` (= fp16) hoặc `fp32`; **không** dùng `bf16` |
+| Giọng clone chưa giống | giọng mẫu sạch hơn (không nhạc nền), hoặc xóa `work/voice/` để chọn lại đoạn mẫu |
 | Video nền giật ở chỗ lặp | tăng `video.loop_crossfade_sec` |
 | Ép độ phân giải | `video.resolution: [1920, 1080]` |
 | Số chương mỗi tập, intro/watermark | `episode.chapters_per_episode`, `episode.inserts` |
-| Đổi giọng | `voice.ref_audio` + `voice.ref_text` (đổi giọng thì các câu đọc lại theo giọng mới) |
+| Đổi giọng | `voice.ref_audio` (tool tự chọn lại đoạn mẫu; chương đã có audio giữ nguyên, muốn đọc lại thì `--force`) |
 
-Sau khi chạy, mở `work/chXXXX/timeline.json` và xem mục `warnings`: đó là các câu vẫn nghi lỗi sau mọi lần đọc lại, kèm thời điểm (`time_sec`) để nghe kiểm tra nhanh.
+Sau khi chạy, mở `work/chXXXX/timeline.json` và xem mục `warnings`: đó là các chunk vẫn nghi lỗi sau mọi lần đọc lại, kèm văn bản và điều ASR nghe được.

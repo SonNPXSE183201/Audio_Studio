@@ -17,18 +17,22 @@ apt-get update -y >/dev/null
 apt-get install -y --no-install-recommends ffmpeg libsndfile1 rclone curl git >/dev/null
 ffmpeg -version | head -1
 
-log "2/5 - Python venv (dùng lại PyTorch CUDA có sẵn của template)"
+log "2/5 - Python venv: VieNeu-TTS (torch 2.8 CUDA 12.8) + PhoWhisper"
 if [[ ! -x "${VENV}/bin/python" ]]; then
   python3 -m venv --system-site-packages "${VENV}"
 fi
 "${VENV}/bin/python" -m pip install -q --upgrade pip wheel
+# VieNeu v3 Turbo trên GPU cần đúng torch 2.8 (CUDA 12.8) + transformers 4.57.6 (theo README VieNeu).
+# Template có torch khác phiên bản -> cài đè trong venv (không đụng Python hệ thống).
+"${VENV}/bin/python" -m pip install -q torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
 "${VENV}/bin/python" -m pip install -q -r "${PROJECT_DIR}/requirements.txt"
-"${VENV}/bin/python" -m pip install -q omnivoice transformers accelerate sentencepiece huggingface_hub
+"${VENV}/bin/python" -m pip install -q "transformers==4.57.6" safetensors accelerate sentencepiece huggingface_hub
+"${VENV}/bin/python" -m pip uninstall -y -q omnivoice 2>/dev/null || true
 
 log "3/5 - Kiểm tra GPU"
 "${VENV}/bin/python" - <<'PY'
 import torch
-assert torch.cuda.is_available(), "PyTorch không thấy GPU: chọn template RunPod PyTorch (CUDA)"
+assert torch.cuda.is_available(), "PyTorch không thấy GPU: chọn pod có driver hỗ trợ CUDA 12.8 trở lên"
 props = torch.cuda.get_device_properties(0)
 print(f"[OK] PyTorch {torch.__version__}; GPU {props.name} {props.total_memory / 1024**3:.0f} GB")
 PY
@@ -78,7 +82,7 @@ source "${ENV_FILE}"
 log "5/5 - Tải trước model (lưu trên volume, lần sau không tải lại)"
 "${VENV}/bin/python" - <<'PY'
 from huggingface_hub import snapshot_download
-for repo in ("k2-fsa/OmniVoice", "vinai/PhoWhisper-large"):
+for repo in ("pnnbao-ump/VieNeu-TTS-v3-Turbo", "OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano", "vinai/PhoWhisper-large"):
     try:
         snapshot_download(repo)
         print(f"[OK] {repo}")
@@ -91,7 +95,7 @@ cat <<EOF
 [XONG] Cài đặt hoàn tất.
   Dữ liệu:  ${DATA_DIR}
     input/                 chép các file Chuong_XXXX.txt vào đây
-    assets/voice/          giọng mẫu .wav + .txt (lời đọc khớp với giọng mẫu)
+    assets/voice/          giọng mẫu .wav (giọng sạch; tool tự cắt đoạn câu <= 8s cho VieNeu)
     assets/background/     background.mp4 (video nền 1-2 phút)
     Kenh/                  Script_Intro.mp3, Script_Watermark.mp3, Script_Watermark1.mp3
     config.yaml            cấu hình (sửa ở đây, cập nhật code không ghi đè)
