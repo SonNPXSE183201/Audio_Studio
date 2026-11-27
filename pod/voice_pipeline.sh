@@ -3,6 +3,7 @@
 #
 #   nohup bash pod/voice_pipeline.sh <dataset> "<Tên giọng>" <giọng mẫu.wav> <chương thử.txt> \
 #         <drive_folder_id> [--stop-pod] > voice_pipeline.log 2>&1 &
+#   EPOCHS="3 5 8 12" (biến môi trường) đổi các mức epoch train; mặc định "2 3 5".
 #
 # Pod KHÔNG có volume thì Stop là mất /workspace: chỉ Stop khi `rclone check` xác nhận Drive đã đủ file.
 set -Eeuo pipefail
@@ -32,7 +33,7 @@ PY
 )"
 say "Clip đóng gói giọng: ${CLIP}"
 
-VOICE_CLIP="${CLIP}" bash "${PROJECT_DIR}/pod/train_voice.sh" "${DATASET}" "${VOICE}" "${REF}" "${CHAPTER}" 2 3 5
+VOICE_CLIP="${CLIP}" bash "${PROJECT_DIR}/pod/train_voice.sh" "${DATASET}" "${VOICE}" "${REF}" "${CHAPTER}" ${EPOCHS:-2 3 5}
 BEST="$(cat "${WORK}/eval/goi_y.txt" 2>/dev/null || true)"
 say "Model gợi ý: ${BEST:-không model fine-tune nào hơn clone tức thì}"
 
