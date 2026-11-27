@@ -89,14 +89,20 @@ def split_clips(x: np.ndarray, sr: int, min_s: float, max_s: float) -> List[Tupl
     return [(int(a * sr), int(b * sr)) for a, b in clips if min_s <= b - a <= max_s]
 
 
-def trim(x: np.ndarray, sr: int, keep: float = 0.12) -> np.ndarray:
+# Đuôi clip chỉ giữ ~40 ms sau khi tiếng tắt (dưới -40 dB so với đỉnh, vẫn trọn đuôi thanh điệu).
+# Đuôi lặng dài làm khung codec cuối của đa số clip là mã im lặng (482) -> prepare_dataset.py của
+# VieNeu coi là lỗi pad frame (issue #198) và từ chối; khoảng nghỉ giữa câu do tool chèn khi ghép.
+TAIL_KEEP = 0.04
+
+
+def trim(x: np.ndarray, sr: int, keep: float = 0.12, tail: float = TAIL_KEEP) -> np.ndarray:
     db = frame_db(x, sr)
     voiced = np.flatnonzero(db > float(np.max(db)) - 40)
     if voiced.size == 0:
         return x
     f = int(sr * FRAME)
     a = max(0, voiced[0] * f - int(keep * sr))
-    b = min(x.size, (voiced[-1] + 1) * f + int(keep * sr))
+    b = min(x.size, (voiced[-1] + 1) * f + int(tail * sr))
     out = x[a:b].copy()
     n = min(int(0.01 * sr), out.size // 2)
     out[:n] *= np.linspace(0, 1, n)
@@ -223,6 +229,8 @@ def main() -> int:
                 total += k["dur"]
     chosen.sort(key=lambda k: (k["src"], k["idx"]))
 
+    for old in os.listdir(audio_dir):
+        os.remove(os.path.join(audio_dir, old))
     meta = os.path.join(args.out, "metadata.csv")
     review = os.path.join(args.out, "review.csv")
     with open(meta, "w", encoding="utf-8", newline="\n") as fm, \
@@ -233,6 +241,7 @@ def main() -> int:
         for k in chosen:
             name = k["name"]
             wav, wsr = mono(os.path.join(clip_dir, name))
+            wav = trim(wav, wsr)          # clip lưu từ bản cũ có đuôi lặng 0,12 s -> cắt lại
             sf.write(os.path.join(audio_dir, name), wav, wsr, subtype="PCM_16")
             fm.write(f"{name}|{k['text']}\n")
             w.writerow([name, k["text"], k["dur"], k["sim"], k["music_db"], k["cps"], k.get("sig"), k.get("ovrl")])
