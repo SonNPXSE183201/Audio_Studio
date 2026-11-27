@@ -26,6 +26,7 @@ from core.audio_utils import read_wav, write_wav  # noqa: E402
 from core.text_processor import chapter_text  # noqa: E402
 from core.utils import log  # noqa: E402
 from core.vieneu_engine import VieneuEngine, chunk_text, cosine, join_chunks  # noqa: E402
+from finetune.speech_quality import dnsmos  # noqa: E402
 
 
 def parse_model(spec: str):
@@ -77,13 +78,17 @@ def main() -> int:
         sims = [cosine(e, target) for e in embs]
         inter = [cosine(embs[i], embs[j]) for i in range(len(embs)) for j in range(i + 1, len(embs))]
         audio_sec = sum(w.size for w in wavs) / engine.sample_rate
+        qs = [q for q in (dnsmos(w, engine.sample_rate) for w in wavs) if q]
         write_wav(os.path.join(args.out, f"{m['label']}.wav"),
                   join_chunks(wavs, ["sentence"] * (len(wavs) - 1)), engine.sample_rate)
         audio[m["label"]] = wavs
         results.append({"label": m["label"], "giong_mau": round(float(np.mean(sims)), 3),
                         "giong_mau_thap_nhat": round(float(np.min(sims)), 3),
                         "dong_deu": round(float(np.mean(inter)), 3),
-                        "nhanh_gap_x": round(audio_sec / max(sec, 1e-6), 1), "backend": engine.backend})
+                        "nhanh_gap_x": round(audio_sec / max(sec, 1e-6), 1), "backend": engine.backend,
+                        "sig": round(float(np.mean([q["sig"] for q in qs])), 2) if qs else None,
+                        "sig_thap_nhat": round(float(np.min([q["sig"] for q in qs])), 2) if qs else None,
+                        "ovrl": round(float(np.mean([q["ovrl"] for q in qs])), 2) if qs else None})
         log(json.dumps(results[-1], ensure_ascii=False), "Eval")
         engine.unload()
 
@@ -95,13 +100,18 @@ def main() -> int:
         r["cer_cau_te_nhat"] = round(float(np.max(cers)), 4)
     asr.unload()
 
+    ref_q = dnsmos(ref, ref_sr)
     with open(os.path.join(args.out, "ket_qua.json"), "w", encoding="utf-8") as handle:
-        json.dump({"cau": chunks, "ket_qua": results}, handle, ensure_ascii=False, indent=1)
-    print(f"\n{'model':<14}{'giống giọng':>12}{'thấp nhất':>11}{'đồng đều':>10}{'CER':>8}{'nhanh x':>9}")
+        json.dump({"cau": chunks, "ket_qua": results, "dnsmos_giong_mau": ref_q}, handle,
+                  ensure_ascii=False, indent=1)
+    print(f"\n{'model':<14}{'giống giọng':>12}{'thấp nhất':>11}{'đồng đều':>10}{'CER':>8}"
+          f"{'SIG':>7}{'SIG min':>9}{'OVRL':>7}")
     for r in results:
+        sig = f"{r['sig']:>7.2f}{r['sig_thap_nhat']:>9.2f}{r['ovrl']:>7.2f}" if r.get("sig") else ""
         print(f"{r['label']:<14}{r['giong_mau']:>12.3f}{r['giong_mau_thap_nhat']:>11.3f}{r['dong_deu']:>10.3f}"
-              f"{r['cer']:>8.1%}{r['nhanh_gap_x']:>9.1f}")
-    print("(mốc: giọng thật tự so với chính nó ~0,89)")
+              f"{r['cer']:>8.1%}{sig}")
+    print("(mốc: giọng thật tự so với chính nó ~0,89"
+          + (f"; DNSMOS giọng mẫu SIG {ref_q['sig']:.2f} OVRL {ref_q['ovrl']:.2f}" if ref_q else "") + ")")
     return 0
 
 

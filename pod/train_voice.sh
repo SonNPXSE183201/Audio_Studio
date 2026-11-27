@@ -38,7 +38,7 @@ if [[ ! -d "${VIENEU_DIR}/.git" ]]; then
 fi
 git -C "${VIENEU_DIR}" fetch -q origin "${VIENEU_COMMIT}" 2>/dev/null || true
 git -C "${VIENEU_DIR}" checkout -q "${VIENEU_COMMIT}"
-"${PY}" -m pip install -q "peft>=0.13" pyarrow accelerate safetensors
+"${PY}" -m pip install -q "peft>=0.13" pyarrow accelerate safetensors "torchmetrics>=1.4" librosa requests
 
 if [[ "${DATASET}" == gdrive:* ]]; then
   log "Tải dataset từ Drive: ${DATASET}"

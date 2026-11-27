@@ -30,6 +30,7 @@ sys.path.insert(0, ROOT)
 from core.asr_checker import ASRChecker  # noqa: E402
 from core.utils import log, read_json, write_json  # noqa: E402
 from core.vieneu_engine import VieneuEngine, cosine  # noqa: E402
+from finetune.speech_quality import dnsmos  # noqa: E402
 
 FRAME = 0.02
 
@@ -118,7 +119,7 @@ def filter_clips(args, clip_dir: str):
     ref, ref_sr = mono(args.ref)
     target = engine.reference_profile(ref, ref_sr)
     denoiser = None if args.no_denoise else getattr(engine.tts.engine, "denoiser", None)
-    stats: Dict[str, int] = {"tong": 0, "nhac": 0, "giong_khac": 0}
+    stats: Dict[str, int] = {"tong": 0, "nhac": 0, "giong_khac": 0, "meo": 0}
     kept: List[Dict] = []
     sources = sorted(d for d in os.listdir(args.demucs) if os.path.exists(os.path.join(args.demucs, d, "vocals.wav")))
     for src in sources:
@@ -140,10 +141,15 @@ def filter_clips(args, clip_dir: str):
             if sim < args.min_sim:
                 stats["giong_khac"] += 1
                 continue
+            q = dnsmos(wav, wsr)
+            if q is not None and q["sig"] < args.min_sig:
+                stats["meo"] += 1
+                continue
             name = f"{src}_{idx:04d}.wav"
             sf.write(os.path.join(clip_dir, name), np.asarray(wav, dtype=np.float32), wsr, subtype="PCM_16")
             kept.append({"name": name, "src": src, "idx": idx, "dur": round(len(wav) / wsr, 2),
-                         "music_db": round(float(music_db), 1), "sim": round(sim, 3)})
+                         "music_db": round(float(music_db), 1), "sim": round(sim, 3),
+                         "sig": q["sig"] if q else None, "ovrl": q["ovrl"] if q else None})
         del vocals, music
     engine.unload()
     return kept, stats
@@ -158,6 +164,8 @@ def main() -> int:
     ap.add_argument("--max-sec", type=float, default=15.0)
     ap.add_argument("--max-music-db", type=float, default=-20.0, help="nhạc còn lại tối đa so với giọng (dB)")
     ap.add_argument("--min-sim", type=float, default=0.6, help="độ giống giọng mẫu tối thiểu")
+    ap.add_argument("--min-sig", type=float, default=3.3,
+                    help="DNSMOS SIG tối thiểu (độ sạch giọng: thấp = méo/sước/rè; giọng thu tốt ~3,4-3,6)")
     ap.add_argument("--target-minutes", type=float, default=30.0)
     ap.add_argument("--asr-model", default="vinai/PhoWhisper-large")
     ap.add_argument("--no-denoise", action="store_true")
@@ -220,14 +228,16 @@ def main() -> int:
     with open(meta, "w", encoding="utf-8", newline="\n") as fm, \
             open(review, "w", encoding="utf-8-sig", newline="") as fr:
         w = csv.writer(fr)
-        w.writerow(["file_name", "text", "giay", "giong_giong_mau", "nhac_con_lai_db", "ky_tu_moi_giay"])
+        w.writerow(["file_name", "text", "giay", "giong_giong_mau", "nhac_con_lai_db", "ky_tu_moi_giay",
+                    "dnsmos_sig", "dnsmos_ovrl"])
         for k in chosen:
             name = k["name"]
             wav, wsr = mono(os.path.join(clip_dir, name))
             sf.write(os.path.join(audio_dir, name), wav, wsr, subtype="PCM_16")
             fm.write(f"{name}|{k['text']}\n")
-            w.writerow([name, k["text"], k["dur"], k["sim"], k["music_db"], k["cps"]])
+            w.writerow([name, k["text"], k["dur"], k["sim"], k["music_db"], k["cps"], k.get("sig"), k.get("ovrl")])
     log(f"Clip: {stats['tong']} | bỏ vì còn nhạc {stats['nhac']}, giọng khác {stats['giong_khac']}, "
+        f"méo/rè (DNSMOS SIG < {args.min_sig}) {stats.get('meo', 0)}, "
         f"chép lời lỗi {stats['loi_chep']} | còn {len(good)} đạt, chọn {len(chosen)} = {total / 60:.1f} phút", "Dataset")
     log(f"Soát lời: {review} (sửa trong {meta})", "Dataset")
     return 0
