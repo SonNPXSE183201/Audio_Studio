@@ -37,7 +37,14 @@ if [[ ! -d "${VIENEU_DIR}/.git" ]]; then
   git clone -q https://github.com/pnnbao97/VieNeu-TTS.git "${VIENEU_DIR}"
 fi
 git -C "${VIENEU_DIR}" fetch -q origin "${VIENEU_COMMIT}" 2>/dev/null || true
-git -C "${VIENEU_DIR}" checkout -q "${VIENEU_COMMIT}"
+git -C "${VIENEU_DIR}" checkout -q -f "${VIENEU_COMMIT}"
+# Kiểm tra issue #198 của prepare_dataset.py chặn khi > 50% clip kết thúc cùng mã codebook-0, để bắt
+# khung đệm lỗi 455 (encoder cũ). Với audio thật cắt tự nhiên, khung cuối gần như luôn là im lặng
+# (encoder đệm 0 cho đủ 80 ms) -> mã 482 = mã IM LẶNG (đo: 0,5 s im lặng -> toàn 482) -> chặn nhầm.
+# Chỉ bỏ qua 482; 455 vẫn bị chặn.
+sed -i 's/    if len(recs) >= 20 and n_same \/ len(recs) > 0.5:/    if len(recs) >= 20 and n_same \/ len(recs) > 0.5 and code != 482:  # 482 = im lặng/' \
+    "${VIENEU_DIR}/finetune/prepare_dataset.py"
+grep -q "code != 482" "${VIENEU_DIR}/finetune/prepare_dataset.py" || { echo "Không vá được prepare_dataset.py"; exit 1; }
 "${PY}" -m pip install -q "peft>=0.13" pyarrow accelerate safetensors "torchmetrics>=1.4" librosa requests
 
 if [[ "${DATASET}" == gdrive:* ]]; then
