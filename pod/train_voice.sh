@@ -6,6 +6,8 @@
 #   <dataset>  thư mục có metadata.csv + raw_audio/ (finetune/build_voice_dataset.py tạo ra),
 #              hoặc đường dẫn Drive "gdrive:..." (tự tải về).
 #   epoch      mặc định "2 3 5": train mỗi mức một model để chọn bản giống giọng nhất mà chưa overfit.
+#   Biến môi trường: LORA_ARGS="--target all --r 32" (tham số thêm cho train_lora.py), RUN_TAG="_all"
+#   (hậu tố tên run), EVAL_OUT (thư mục kết quả chấm điểm).
 #
 # Kết quả: ${AUDIO_STUDIO_DATA}/voice_lora/output/<giọng>_e<N>/merged  (model + giọng đóng gói)
 #          ${AUDIO_STUDIO_DATA}/voice_lora/eval/ket_qua.json + file nghe thử từng model.
@@ -71,26 +73,33 @@ fi
 DATASET="$(realpath "${DATASET}")"; CLIP="$(realpath "${CLIP}")"
 
 cd "${WORK}"
-log "2/5 - Mã hóa dataset ($(wc -l < "${DATASET}/metadata.csv") clip)"
-"${PY}" "${VIENEU_DIR}/finetune/prepare_dataset.py" --dataset-dir "${DATASET}"
+if [[ -f "${DATASET}/train.parquet" && "${DATASET}/train.parquet" -nt "${DATASET}/metadata.csv" ]]; then
+  log "2/5 - Dùng lại ${DATASET}/train.parquet (mới hơn metadata.csv)"
+else
+  log "2/5 - Mã hóa dataset ($(wc -l < "${DATASET}/metadata.csv") clip)"
+  "${PY}" "${VIENEU_DIR}/finetune/prepare_dataset.py" --dataset-dir "${DATASET}"
+fi
 
 MODELS=(--model "goc=clone:${CLIP}")
 for E in "${EPOCHS[@]}"; do
-  RUN="${SLUG}_e${E}"
-  log "3/5 - Train LoRA ${E} epoch -> ${RUN}"
+  RUN="${SLUG}${RUN_TAG:-}_e${E}"
+  log "3/5 - Train LoRA ${E} epoch ${LORA_ARGS:-} -> ${RUN}"
   # Dataset nhỏ (~200-300 clip): eval mỗi 10 bước để thấy lúc eval loss ngừng giảm (overfit).
   "${PY}" "${VIENEU_DIR}/finetune/train_lora.py" --data "${DATASET}/train.parquet" --run "${RUN}" \
       --output-dir "${WORK}/output" --epochs "${E}" --eval-ratio 0.05 --eval-every 10 \
-      --save-every 100000 --merge 2>&1 | tee "${WORK}/${RUN}.log"
+      --save-every 100000 --merge ${LORA_ARGS:-} 2>&1 | tee "${WORK}/${RUN}.log"
   log "4/5 - Đóng gói giọng '${VOICE}' vào ${RUN}/merged"
   "${PY}" "${VIENEU_DIR}/finetune/make_voice.py" --audio "${CLIP}" --name "${VOICE}" --default \
       --out "${WORK}/output/${RUN}/merged"
-  MODELS+=(--model "e${E}=${WORK}/output/${RUN}/merged:${VOICE}")
+  # Thêm giọng từ hồ sơ TRUNG BÌNH cả dataset (thường đồng đều hơn một clip lẻ) để chấm so sánh.
+  "${PY}" "${PROJECT_DIR}/finetune/make_mean_voice.py" --data "${DATASET}/train.parquet"       --name "${VOICE} TB" --out "${WORK}/output/${RUN}/merged"
+  MODELS+=(--model "${RUN_TAG:-}e${E}=${WORK}/output/${RUN}/merged:${VOICE}")
+  MODELS+=(--model "${RUN_TAG:-}e${E}tb=${WORK}/output/${RUN}/merged:${VOICE} TB")
 done
 
 log "5/5 - Chấm điểm: clone tức thì vs các model fine-tune"
 cd "${PROJECT_DIR}"
-"${PY}" finetune/eval_voice.py --ref "${REF}" --chapter "${CHAPTER}" --out "${WORK}/eval" "${MODELS[@]}"
+"${PY}" finetune/eval_voice.py --ref "${REF}" --chapter "${CHAPTER}" --out "${EVAL_OUT:-${WORK}/eval}" "${MODELS[@]}"
 
 cat <<EOF
 
