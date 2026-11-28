@@ -59,7 +59,7 @@ Dự án truyện/
 │   ├── chuong/            Chuong_0001.txt, Chuong_0002.txt … (số chương lấy từ tên file)
 │   │                      glossary.json (tùy chọn) cách đọc riêng: {"Lv": "cấp", "QQ": "qui qui"}
 │   │                      names.txt     (tùy chọn) mỗi dòng 1 tên riêng: ASR không tính sai các tên này
-│   ├── voice/             voice_reference_clean.wav  giọng mẫu 6–20 giây, sạch, không nhạc nền
+│   ├── voice/             voice_reference_clean.wav  giọng mẫu 6–20 giây (chỉ dùng khi tắt giọng đã train: tts.voice = null)
 │   │                      voice_reference_clean.txt  lời đọc KHỚP CHÍNH XÁC với giọng mẫu
 │   ├── background/        background.mp4  video nền 1–2 phút, lặp đến hết audio
 │   ├── Kenh/              Script_Intro.mp3 (đầu tập), Script_Watermark.mp3 (trước chương 9),
@@ -177,3 +177,11 @@ Audio_Studio/
 | Đổi giọng | `voice.ref_audio` (tool tự chọn lại đoạn mẫu; chương đã có audio giữ nguyên, muốn đọc lại thì `--force`) |
 
 Sau khi chạy, mở `work/chXXXX/timeline.json` và xem mục `warnings`: đó là các chunk vẫn nghi lỗi sau mọi lần đọc lại, kèm văn bản và điều ASR nghe được.
+
+## Giọng đã train (mặc định)
+
+`config.yaml` → `tts.backbone_repo` / `tts.model_remote` / `tts.voice`: tool tự tải model giọng đã fine-tune từ
+`gdrive:Dự án truyện/Train/models/giong_doc_truyen_all_e8/merged` về `/workspace/audio_studio/models/` (một lần,
+dùng chung cho mọi bộ truyện) và đọc bằng giọng **"Giọng đọc truyện TB"**. File `voice/` của từng bộ không còn
+được dùng. Model fine-tune chỉ chạy trên GPU. Train lại giọng mới thì đổi tên thư mục ở cả `backbone_repo` lẫn
+`model_remote` để pod tải bản mới.

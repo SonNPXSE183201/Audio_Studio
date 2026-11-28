@@ -280,6 +280,41 @@ class DriveSyncTests(unittest.TestCase):
                 drive.pull, drive.list_files = orig_pull, orig_list
                 studio.DATA = orig_data
 
+    def test_trained_model_downloaded_once_to_shared_dir(self):
+        import argparse
+        import shutil as sh
+
+        import studio
+        from core import drive
+
+        with tempfile.TemporaryDirectory() as tmp:
+            remote = os.path.join(tmp, "remote_model")
+            os.makedirs(remote)
+            with open(os.path.join(remote, "config.json"), "w") as f:
+                f.write("{}")
+            calls = []
+
+            def fake_pull(src, local, conf, includes=None):
+                calls.append(src)
+                sh.copytree(src, local, dirs_exist_ok=True)
+                return True
+
+            orig_pull, orig = drive.pull, (studio.DATA, studio.BASE)
+            drive.pull = fake_pull
+            studio.BASE = tmp
+            studio.DATA = os.path.join(tmp, "projects", "Bo A")
+            try:
+                st = studio.Studio({}, argparse.Namespace(range=None, force=False, finish=False, job="audio1"))
+                path = st.model_dir("models/giong", remote)
+                self.assertEqual(os.path.join(tmp, "models/giong"), path)   # chung mọi bộ, không theo bộ
+                self.assertTrue(os.path.isfile(os.path.join(path, "config.json")))
+                self.assertEqual(path, st.model_dir("models/giong", remote))
+                self.assertEqual(1, len(calls))                                # lần sau không tải lại
+                self.assertEqual("org/repo", st.model_dir("org/repo", None))   # tên repo HF giữ nguyên
+            finally:
+                drive.pull = orig_pull
+                studio.DATA, studio.BASE = orig
+
     def test_uploaded_episode_names(self):
         from core.drive import uploaded_episodes
 

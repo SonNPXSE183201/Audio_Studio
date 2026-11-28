@@ -22,10 +22,12 @@ voice:
 # Tách câu, chuẩn hóa số/viết tắt, nhịp nghỉ (đoạn 0,7 s / câu 0,5 s / trong câu 0,3 s) đều theo VieNeu.
 # Không có tham số tốc độ đọc: nhịp đọc đi theo giọng mẫu.
 tts:
-  # Giọng đã fine-tune (pod/train_voice.sh): đặt thư mục model đã merge + tên giọng trong đó.
-  # Để null = clone tức thì từ voice.ref_audio bằng model gốc.
-  backbone_repo: null           # ví dụ "/workspace/audio_studio/voice_lora/output/giong_doc_e3/merged"
-  voice: null                   # ví dụ "Giọng đọc truyện"
+  # Giọng đã fine-tune (pod/train_voice.sh, kết quả ở Drive "Dự án truyện/Train"): tool tự tải model từ
+  # model_remote về backbone_repo (1 lần, dùng chung mọi bộ) rồi đọc bằng giọng `voice` trong model đó.
+  # Khi đó KHÔNG dùng voice.ref_audio. Chỉ chạy GPU. Muốn quay về clone tức thì: đặt 3 dòng dưới = null.
+  backbone_repo: "models/giong_doc_truyen_all_e8"
+  model_remote: "gdrive:Dự án truyện/Train/models/giong_doc_truyen_all_e8/merged"
+  voice: "Giọng đọc truyện TB"  # giọng trung bình cả dataset (đồng đều nhất); "Giọng đọc truyện" = clip mẫu
   backend: "auto"               # auto = GPU (PyTorch) nếu có CUDA, không thì CPU (ONNX)
   precision: null               # chỉ cho CPU: "int8" nhanh ~1,6x nhưng cần CPU có VNNI
   denoise: true                 # VieNeu khử nhiễu giọng mẫu trước khi clone

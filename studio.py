@@ -328,9 +328,39 @@ class Studio:
         return {"chapters": len(files), "episodes": len(episodes), "episodes_done": len(done),
                 "chapters_pending": len(pending), "first_pending": pending[0] if pending else None}
 
+    def model_dir(self, repo: str, remote: Optional[str]) -> str:
+        """Model giọng đã fine-tune: thư mục cục bộ (tương đối = trong thư mục dữ liệu gốc, dùng chung mọi
+        bộ truyện). Chưa có mà có tts.model_remote thì tải từ Drive MỘT lần; job khác chờ bản tải xong.
+        Không phải thư mục cục bộ và không có model_remote -> giữ nguyên (tên repo HuggingFace)."""
+        local = repo if os.path.isabs(repo) else os.path.join(BASE, repo)
+        done = os.path.join(local, ".tai_xong")
+        if os.path.exists(done) or (not remote and os.path.isfile(os.path.join(local, "config.json"))):
+            return local
+        if not remote:
+            return repo
+        lock = local.rstrip("/\\") + ".lock"
+        os.makedirs(os.path.dirname(lock), exist_ok=True)
+        for _ in range(720):
+            if os.path.exists(done):
+                return local
+            if locks.claim(lock, self.job, stale_sec=1800):
+                try:
+                    log(f"Tải model giọng đã train: {remote} -> {local}", "Drive")
+                    if not drive.pull(remote, local, self.rclone_config()) or \
+                            not os.path.isfile(os.path.join(local, "config.json")):
+                        raise RuntimeError(f"Không tải được model giọng từ {remote} (kiểm tra rclone.conf / đường dẫn)")
+                    open(done, "w").close()
+                    return local
+                finally:
+                    locks.release(lock)
+            time.sleep(5)
+        raise RuntimeError(f"Chờ job khác tải model {remote} quá lâu")
+
     def audio(self) -> ChapterBuilder:
         if self._audio is None:
             tts_cfg = dict(self.cfg.get("tts", {}))
+            if tts_cfg.get("backbone_repo"):
+                tts_cfg["backbone_repo"] = self.model_dir(str(tts_cfg["backbone_repo"]), tts_cfg.get("model_remote"))
             tts = VieneuEngine(tts_cfg)
             asr = ASRChecker(self.cfg.get("asr", {}))
             self._audio = ChapterBuilder(tts, asr, tts_cfg, self.cfg.get("asr", {}), self.master_cfg)
@@ -778,8 +808,12 @@ class Studio:
         except Exception:  # noqa: BLE001
             log("vieneu: THIẾU (pip install -r requirements.txt)", "Check")
             ok = False
-        vcfg = self.cfg.get("voice", {})
-        log(f"Giọng mẫu: {rel(vcfg.get('ref_audio', '')) if os.path.exists(rel(vcfg.get('ref_audio', ''))) else 'THIẾU'}", "Check")
+        vcfg, tcfg = self.cfg.get("voice", {}), self.cfg.get("tts", {})
+        if tcfg.get("voice"):
+            log(f"Giọng đã train: '{tcfg['voice']}' trong {tcfg.get('backbone_repo')} "
+                f"(tải từ {tcfg.get('model_remote') or 'máy'}); không dùng giọng mẫu", "Check")
+        else:
+            log(f"Giọng mẫu: {rel(vcfg.get('ref_audio', '')) if os.path.exists(rel(vcfg.get('ref_audio', ''))) else 'THIẾU'}", "Check")
         bg = self.background_video()
         log(f"Video nền: {bg if os.path.exists(bg) else 'THIẾU'}", "Check")
         log(f"Chương trong {self.input_dir}: {len(self.chapter_files())}", "Check")
