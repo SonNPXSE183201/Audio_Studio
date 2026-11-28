@@ -15,7 +15,10 @@ DATA_DIR="${AUDIO_STUDIO_DATA:-/workspace/audio_studio}"
 [[ -f "${DATA_DIR}/env.sh" ]] && source "${DATA_DIR}/env.sh"
 PY="${AUDIO_STUDIO_PYTHON:-python3}"
 WORK="${DATA_DIR}/voice_lora"
-RC=(--config "${DATA_DIR}/rclone.conf" --drive-root-folder-id "${FOLDER_ID}")
+# --timeout: một lần upload Drive bị treo (đã gặp: file model 236 MB đứng ~1 KB/s hơn 20 phút) thì
+# rclone bỏ kết nối đó và thử lại thay vì chờ mãi; chunk 64M để file lớn lên nhanh.
+RC=(--config "${DATA_DIR}/rclone.conf" --drive-root-folder-id "${FOLDER_ID}" --timeout 2m --contimeout 30s
+    --retries 5 --low-level-retries 20 --drive-chunk-size 64M)
 # Đích PHẢI có tiền tố remote: thiếu "gdrive:" thì rclone chép vào thư mục CỤC BỘ trên pod, rclone check
 # so cục bộ cũng "khớp" -> tưởng đã lên Drive rồi Stop pod -> mất hết (đã xảy ra 28/11/2026).
 DST="${DRIVE_REMOTE:-gdrive}:"
