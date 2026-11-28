@@ -40,6 +40,10 @@ say "Clip đóng gói giọng: ${CLIP}"
 VOICE_CLIP="${CLIP}" bash "${PROJECT_DIR}/pod/train_voice.sh" "${DATASET}" "${VOICE}" "${REF}" "${CHAPTER}" ${EPOCHS:-2 3 5}
 BEST="$(cat "${WORK}/eval/goi_y.txt" 2>/dev/null || true)"
 say "Model gợi ý: ${BEST:-không model fine-tune nào hơn clone tức thì}"
+# Điểm giống giọng so với chính người đọc trong dataset (kèm trần giọng thật). Lỗi thì bỏ qua.
+( cd "${PROJECT_DIR}" && "${PY}" finetune/score_voice.py --dataset "${DATASET}" --ref "${REF}" \
+    "${WORK}"/eval/*.wav 2>&1 | grep -v -i -E 'warn' > "${WORK}/eval/diem_giong.txt" ) || true
+cat "${WORK}/eval/diem_giong.txt" 2>/dev/null || true
 
 say "Đẩy kết quả lên Drive (thư mục ${FOLDER_ID})..."
 cp "${CLIP}" "${WORK}/eval/clip_dong_goi_giong.wav"
