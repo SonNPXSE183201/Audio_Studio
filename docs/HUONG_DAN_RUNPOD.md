@@ -51,9 +51,9 @@ Chế độ tự tắt pod chỉ tắt khi **thật sự xong**:
 
 ### Mặc định: không cần Network Volume (template Audio Studio)
 
-Chương lấy từ Drive, video đẩy về Drive, nên chỉ cần **ổ container 40 GB** (model ~6 GB, audio 20 chương, video tập đang chờ upload).
+Chương lấy từ Drive, video đẩy về Drive, nên chỉ cần **ổ container 40 GB** (model ~6 GB, audio 40 chương, video tập đang chờ upload).
 - Mỗi lần tạo pod mới phải cài lại và tải lại model: **~10 phút**.
-- Stop/Terminate pod là mất những gì **chưa lên Drive** (tối đa ~20 chương đang làm dở): nên thuê **On-Demand**, không thuê Spot.
+- Stop/Terminate pod là mất những gì **chưa lên Drive** (tối đa ~40 chương đang làm dở): nên thuê **On-Demand**, không thuê Spot.
 - Pod mới tự biết tập nào đã xong nhờ xem thư mục video trên Drive (`sync.skip_uploaded: true`), không cần nhớ `--range`.
 - `upload.delete_audio_after_upload: true` (mặc định) giữ ổ container không đầy.
 
@@ -130,13 +130,13 @@ Dùng template **Audio Studio** đã tạo sẵn (RunPod → **Templates**). C�
 |---|---|
 | Template name | `Audio Studio` (Type: Pod, Compute: NVIDIA GPU, Private) |
 | Container image | `runpod/pytorch:1.0.3-cu1281-torch280-ubuntu2404` (CUDA 12.8: chạy cả RTX 5090 / PRO 4500) |
-| Container disk | **40 GB** (model ~6 GB + audio 20 chương + video 1 tập ~8 GB) |
+| Container disk | **40 GB** (model ~6 GB + audio 40 chương + video 1 tập ~16 GB) |
 | Volume | 0 GB: không cần, mọi thứ lấy từ / đẩy về Google Drive |
 | HTTP port | `Jupyter` 8888 (mở Terminal, kéo-thả file) |
 | TCP port | `SSH` 22 |
 | Environment variable | `RCLONE_CONF_B64` = `{{ RUNPOD_SECRET_rclone_conf }}` (bấm biểu tượng chìa khóa ở ô value để chọn secret) |
 
-Khi Deploy: chọn **On-Demand** (Spot bị thu hồi thì mất phần chưa lên Drive, tối đa ~20 chương), GPU theo bảng ở mục 2, ≥ 4 vCPU và ≥ 16 GB RAM.
+Khi Deploy: chọn **On-Demand** (Spot bị thu hồi thì mất phần chưa lên Drive, tối đa ~40 chương), GPU theo bảng ở mục 2, ≥ 4 vCPU và ≥ 16 GB RAM.
 
 ## 4. Cài đặt (chạy lại sau mỗi lần Start pod)
 
@@ -252,9 +252,9 @@ bash run.sh start                 # chạy nền, đóng trình duyệt vẫn ch
 bash run.sh log                   # xem tiến độ
 ```
 
-Khi chạy, GPU đọc audio từng chương. Đủ 20 chương thì CPU ghép tập và upload **trong lúc GPU đọc tiếp**.
+Khi chạy, GPU đọc audio từng chương. Đủ 40 chương thì CPU ghép tập và upload **trong lúc GPU đọc tiếp**.
 
-Hết truyện (tập cuối chưa đủ 20 chương):
+Hết truyện (tập cuối chưa đủ 40 chương):
 
 ```bash
 bash run.sh video --finish
@@ -271,14 +271,14 @@ bash run.sh stop --project "Đại Niết Bàn"
 
 - Mỗi bộ truyện có dữ liệu riêng ở `/workspace/audio_studio/projects/<tên>/`, lấy chương từ `gdrive:Dự án truyện/<tên>/chuong` (theo `{project}` trong `config.yaml`).
 - Các job audio **tự chia chương** bằng khóa: job nào rảnh thì lấy chương kế tiếp chưa ai làm, không đọc trùng, không cần `--range`.
-- Job video chạy bằng CPU, đủ 20 chương liên tiếp là ghép tập và upload, mỗi tập chỉ ghép một lần, tự dừng khi audio xong hết.
+- Job video chạy bằng CPU, đủ 40 chương liên tiếp là ghép tập và upload, mỗi tập chỉ ghép một lần, tự dừng khi audio xong hết.
 - `--jobs 2` có nhanh hơn 1 job không thì tùy GPU: xem `nvidia-smi`, GPU-Util dưới ~70% thì mới đáng chạy 2 job (mục 2). Mỗi job tự giảm batch còn một nửa để vừa VRAM.
 
-**2 pod cho một bộ truyện:** khóa chương chỉ có tác dụng trong cùng một pod, nên 2 pod phải chia chương bằng `--range` theo bội số 20:
+**2 pod cho một bộ truyện:** khóa chương chỉ có tác dụng trong cùng một pod, nên 2 pod phải chia chương bằng `--range` theo bội số 40:
 
 ```bash
-bash run.sh start --project "Đại Niết Bàn" --range 1-750      # pod 1
-bash run.sh start --project "Đại Niết Bàn" --range 751-1500   # pod 2
+bash run.sh start --project "Đại Niết Bàn" --range 1-760      # pod 1
+bash run.sh start --project "Đại Niết Bàn" --range 761-1500   # pod 2
 ```
 
 ## 8. Xem tool đang làm gì

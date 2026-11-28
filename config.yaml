@@ -56,12 +56,12 @@ master:
 
 # --- Ghép tập ---
 episode:
-  chapters_per_episode: 20      # số chương gộp thành 1 video
+  chapters_per_episode: 40      # số chương gộp thành 1 video
   watch_seconds: 60             # job video: bao lâu quét audio một lần
   inserts:                      # file chèn: after = chèn TRƯỚC chương thứ (after+1); "end" = cuối tập
     - {after: 0, file: "Kenh/Script_Intro.mp3"}
-    - {after: 8, file: "Kenh/Script_Watermark.mp3"}
-    - {after: 16, file: "Kenh/Script_Watermark1.mp3"}
+    - {after: 16, file: "Kenh/Script_Watermark.mp3"}
+    - {after: 32, file: "Kenh/Script_Watermark1.mp3"}
 
 video:
   background: "assets/background/background.mp4"   # video nền ngắn (1-2 phút), lặp đến hết audio

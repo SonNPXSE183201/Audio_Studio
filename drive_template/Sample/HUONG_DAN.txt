@@ -9,11 +9,11 @@ voice/       voice_reference_clean.wav  (giọng mẫu 8-20 giây, sạch, khôn
              VieNeu chỉ dùng tối đa 8 giây: tool tự cắt đoạn câu trọn vẹn giống giọng nhất)
 background/  background.mp4  (video nền 1-2 phút, tool lặp đến hết audio)
 Kenh/        Script_Intro.mp3       (chèn đầu mỗi tập)
-             Script_Watermark.mp3   (chèn trước chương thứ 9 của tập)
-             Script_Watermark1.mp3  (chèn trước chương thứ 17 của tập)
+             Script_Watermark.mp3   (chèn trước chương thứ 17 của tập)
+             Script_Watermark1.mp3  (chèn trước chương thứ 33 của tập)
 video/       Để trống. Tool tự đẩy video lên đây:
-             Chuong_0001-0020_Tap001.mp4, Chuong_0021-0040_Tap002.mp4, ...
+             Chuong_0001-0040_Tap001.mp4, Chuong_0041-0080_Tap002.mp4, ...
              Tập đã có ở đây thì tool bỏ qua, không đọc lại.
 
-Mỗi tập = 20 chương. Thiếu file nào trong Kenh/ thì tool bỏ qua chỗ chèn đó.
+Mỗi tập = 40 chương. Thiếu file nào trong Kenh/ thì tool bỏ qua chỗ chèn đó.
 Có thể xóa file HUONG_DAN.txt và các file _dat_file_vao_day.txt sau khi copy.

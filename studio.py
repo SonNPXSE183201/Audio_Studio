@@ -4,7 +4,7 @@
   python studio.py run                 đọc audio + tự ghép tập khi đủ chương (chạy song song)
   python studio.py run --range 1-400   chỉ xử lý chương 1-400
   python studio.py audio --project X   chỉ đọc audio của bộ truyện X (chạy nhiều job cùng lúc được)
-  python studio.py video --watch       job ghép video chạy ngầm: đủ 20 chương là ghép + upload
+  python studio.py video --watch       job ghép video chạy ngầm: đủ 40 chương là ghép + upload
   python studio.py video [--finish]    ghép các tập đã đủ audio (--finish: gom cả tập lẻ cuối)
   python studio.py check               kiểm tra môi trường (ffmpeg, GPU, giọng mẫu, video nền)
   python studio.py bench --price 0.69  đo tốc độ + đánh giá ASR trên chương thật, quy ra chi phí
@@ -220,7 +220,7 @@ class Studio:
                     log(f"Drive: {marked} tập đã có trên Drive, bỏ qua các chương của chúng.", "Drive")
 
     def episode_of(self, number: int) -> int:
-        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 20))
+        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 40))
         return (number - 1) // max(per, 1) + 1
 
     # ------------------------------------------------------------ chapters
@@ -438,7 +438,7 @@ class Studio:
 
     # ------------------------------------------------------------ episodes
     def episode_info(self, episode: int) -> Tuple[List[int], str]:
-        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 20))
+        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 40))
         numbers = list(range((episode - 1) * per + 1, episode * per + 1))
         return numbers, os.path.join(self.video_dir, f"Chuong_{numbers[0]:04d}-{numbers[-1]:04d}_Tap{episode:03d}.mp4")
 
@@ -464,7 +464,7 @@ class Studio:
         return False
 
     def ready_episodes(self, finish: bool) -> List[int]:
-        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 20))
+        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 40))
         chapters = [n for n, _ in self.chapter_files()]
         if not chapters or per <= 0:
             return []
@@ -714,7 +714,7 @@ class Studio:
                 ("p90", np.percentile(cers, 90)), ("p99", np.percentile(cers, 99)))})
         report["summary"] = summary
         write_json(os.path.join(out_dir, "report.json"), report)
-        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 20))
+        per = int(self.cfg.get("episode", {}).get("chapters_per_episode", 40))
         chapter_audio_min = totals["audio"] / 60 / max(len(items), 1)
         lines = [f"Máy: {report['machine']} | VieNeu backend {builder.tts.backend} | chọn giọng mẫu {voice_sec:.0f}s",
                  f"{len(items)} chương = {summary['audio_min']:.1f} phút audio, {totals['chunks']} chunk"]
