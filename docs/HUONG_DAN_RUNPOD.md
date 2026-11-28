@@ -273,6 +273,7 @@ bash run.sh stop --project "Đại Niết Bàn"
 - Các job audio **tự chia chương** bằng khóa: job nào rảnh thì lấy chương kế tiếp chưa ai làm, không đọc trùng, không cần `--range`.
 - Job video chạy bằng CPU, đủ 40 chương liên tiếp là ghép tập và upload, mỗi tập chỉ ghép một lần, tự dừng khi audio xong hết.
 - `--jobs 2` có nhanh hơn 1 job không thì tùy GPU: xem `nvidia-smi`, GPU-Util dưới ~70% thì mới đáng chạy 2 job (mục 2). Mỗi job tự giảm batch còn một nửa để vừa VRAM.
+- **GPU 16 GB (RTX 2000 Ada, A4000…): chỉ chạy `--jobs 1`.** Đo thật 28/11/2026 với model giọng đã train: 1 job đã dùng ~15 GB VRAM (GPU-Util 99%); 2 job thì job thứ hai hết VRAM và bỏ qua liên tục các chương. Tốc độ 1 job: 2,4× thời gian thực (chương 13.745 ký tự = 11 phút audio trong 4 phút 42 giây).
 
 **2 pod cho một bộ truyện:** khóa chương chỉ có tác dụng trong cùng một pod, nên 2 pod phải chia chương bằng `--range` theo bội số 40:
 
