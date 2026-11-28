@@ -29,7 +29,7 @@ rclone copy "${RC[@]}" "gdrive:Dự án truyện/${STORY}/chuong" "${V}/ref" --i
 [[ -s "${V}/ref/voice_reference_clean.wav" && -s "${V}/ref/Chuong_0100.txt" ]] || { say "Thiếu giọng mẫu/chương thử"; exit 1; }
 
 say "3/4 - Tải YouTube + tách nhạc + dataset"
-"${PY}" -m pip install -q yt-dlp demucs
+"${PY}" -m pip install -q yt-dlp demucs "torchmetrics>=1.4" librosa requests onnxruntime
 cd "${V}/raw"
 for s in ${SECTIONS}; do
   out="${s%@*}"; id="${out%_b}"

@@ -175,7 +175,13 @@ def main() -> int:
     ap.add_argument("--target-minutes", type=float, default=30.0)
     ap.add_argument("--asr-model", default="vinai/PhoWhisper-large")
     ap.add_argument("--no-denoise", action="store_true")
+    ap.add_argument("--no-dnsmos", action="store_true", help="bỏ lọc méo/rè (KHÔNG khuyên dùng)")
     args = ap.parse_args()
+    # Thiếu torchmetrics/onnxruntime thì dnsmos() trả None và lọc rè bị BỎ QUA LẶNG LẼ -> chặn ngay.
+    if not args.no_dnsmos and dnsmos(np.zeros(32000, dtype=np.float32) + 1e-4, 16000) is None:
+        log("DNSMOS không chạy được: pip install 'torchmetrics>=1.4' librosa requests onnxruntime "
+            "(hoặc --no-dnsmos)", "Dataset")
+        return 1
 
     audio_dir = os.path.join(args.out, "raw_audio")
     os.makedirs(audio_dir, exist_ok=True)
@@ -186,6 +192,18 @@ def main() -> int:
     if os.path.exists(index_path):
         kept, stats = read_json(index_path)["clips"], read_json(index_path)["stats"]
         log(f"Dùng lại {len(kept)} clip đã lọc ở {clip_dir}", "Dataset")
+        # Clip lọc lúc DNSMOS chưa chạy được (sig None) -> chấm bù và bỏ clip méo/rè.
+        missing = [k for k in kept if k.get("sig") is None]
+        if missing and not args.no_dnsmos:
+            for k in missing:
+                q = dnsmos(*mono(os.path.join(clip_dir, k["name"])))
+                k["sig"], k["ovrl"] = q["sig"], q["ovrl"]
+            bad = [k for k in kept if k["sig"] < args.min_sig]
+            stats["meo"] = stats.get("meo", 0) + len(bad)
+            kept = [k for k in kept if k["sig"] >= args.min_sig]
+            write_json(index_path, {"clips": kept, "stats": stats})
+            log(f"Chấm bù DNSMOS {len(missing)} clip: bỏ {len(bad)} clip méo/rè "
+                f"({', '.join(k['name'] for k in bad) or '-'})", "Dataset")
     else:
         kept, stats = filter_clips(args, clip_dir)
         write_json(index_path, {"clips": kept, "stats": stats})
